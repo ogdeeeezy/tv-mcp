@@ -14,3 +14,6 @@ export * as batch from './batch.js';
 export * as watchlist from './watchlist.js';
 export * as indicators from './indicators.js';
 export * as ui from './ui.js';
+export * as tab from './tab.js';
+export * as diagnostics from './diagnostics.js';
+export * as mcpLog from './mcp_log.js';
