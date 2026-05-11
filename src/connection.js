@@ -2,10 +2,50 @@ import CDP from 'chrome-remote-interface';
 
 let client = null;
 let targetInfo = null;
+let pinnedTargetId = null;
 const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
+
+// Startup-time target filter. Parsed once from TV_MCP_TARGET_FILTER env var.
+// Syntax: "<field><op><value>" where field ∈ {symbol, title, url, id}, op ∈ {=, ~}.
+// Both = and ~ are case-insensitive substring matches except id= which is exact.
+// Examples: symbol=COMEX:GC1!, title~ICC, url~chart/Wfn4, id=ABC123
+const activeFilter = parseFilter(process.env.TV_MCP_TARGET_FILTER);
+
+function parseFilter(raw) {
+  if (!raw) return null;
+  const m = String(raw).match(/^(symbol|title|url|id)\s*([=~])\s*(.+)$/i);
+  if (!m) {
+    throw new Error(`Invalid TV_MCP_TARGET_FILTER: ${raw}. Expected <field><op><value> where field is symbol|title|url|id and op is = or ~.`);
+  }
+  return { field: m[1].toLowerCase(), op: m[2], value: m[3].trim() };
+}
+
+function targetMatchesFilter(target, filter) {
+  if (!filter) return true;
+  const { field, op, value } = filter;
+  if (field === 'id') return target.id === value;
+  const haystack = field === 'title' ? (target.title || '')
+    : field === 'url' ? (target.url || '')
+    : /* symbol: URL substring is the reliable signal */ (target.url || '');
+  return haystack.toLowerCase().includes(value.toLowerCase());
+}
+
+export function setPin(targetId) {
+  pinnedTargetId = targetId;
+  // Force reconnect on next getClient call so the new pin takes effect immediately.
+  if (client) {
+    try { client.close(); } catch {}
+    client = null;
+    targetInfo = null;
+  }
+}
+
+export function clearPin() { setPin(null); }
+export function getPin() { return pinnedTargetId; }
+export function getActiveFilter() { return activeFilter; }
 
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
@@ -90,9 +130,28 @@ export async function connect() {
 async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
-  // Prefer targets with tradingview.com/chart in the URL
-  return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
-    || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))
+  const pages = targets.filter(t => t.type === 'page');
+
+  // 1. Runtime pin wins: must match exactly or we hard-fail (deterministic by design).
+  if (pinnedTargetId) {
+    const pinned = pages.find(t => t.id === pinnedTargetId);
+    if (!pinned) {
+      throw new Error(`Pinned target ${pinnedTargetId} not found. Tab may have been closed. Call tab_unpin or tab_pin <new-id>.`);
+    }
+    return pinned;
+  }
+
+  // 2. Startup filter: scope candidate set to filter-matching TV pages.
+  const tvPages = pages.filter(t => /tradingview\.com\/chart/i.test(t.url) || /tradingview/i.test(t.url));
+  const candidates = activeFilter ? tvPages.filter(t => targetMatchesFilter(t, activeFilter)) : tvPages;
+
+  if (activeFilter && candidates.length === 0) {
+    throw new Error(`No TradingView tab matches filter ${activeFilter.field}${activeFilter.op}${activeFilter.value}. Open the tab or change TV_MCP_TARGET_FILTER.`);
+  }
+
+  // 3. Default: prefer /chart pages over generic TradingView pages.
+  return candidates.find(t => /tradingview\.com\/chart/i.test(t.url))
+    || candidates.find(t => /tradingview/i.test(t.url))
     || null;
 }
 
