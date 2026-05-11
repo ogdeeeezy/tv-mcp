@@ -2,7 +2,7 @@
  * Core tab management logic.
  * Controls TradingView Desktop tabs via CDP and Electron keyboard shortcuts.
  */
-import { getClient, evaluate } from '../connection.js';
+import { getClient, evaluate, setPin, clearPin, getPin } from '../connection.js';
 
 const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
@@ -80,6 +80,104 @@ export async function closeTab() {
 
   const after = await list();
   return { success: true, action: 'tab_closed', tabs_before: before.tab_count, tabs_after: after.tab_count };
+}
+
+/**
+ * Enriched list of TV tabs for human/AI selection. Includes pin state.
+ * Adds chart_id, symbol (parsed from title), pinned flag.
+ */
+export async function picker() {
+  const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
+  const targets = await resp.json();
+  const pinId = getPin();
+
+  const tvPages = targets.filter(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url));
+  const tabs = tvPages.map((t, i) => {
+    // TV titles look like: "GOLD FUTURES (GC1!), 4h Chart Online — TradingView"
+    // Symbol is the parenthetical before " Chart".
+    const symbolMatch = t.title.match(/\(([^)]+)\)\s*,/);
+    return {
+      index: i,
+      id: t.id,
+      title: t.title.replace(/^Live stock.*charts on /, '').replace(/\s*[-—]\s*TradingView$/, ''),
+      symbol: symbolMatch ? symbolMatch[1] : null,
+      url: t.url,
+      chart_id: t.url.match(/\/chart\/([^/?]+)/)?.[1] || null,
+      pinned: t.id === pinId,
+    };
+  });
+
+  return { success: true, tab_count: tabs.length, pinned_id: pinId, tabs };
+}
+
+/**
+ * Pin the MCP to a specific tab. Accepts exact id, or substring match on
+ * title/symbol/url (case-insensitive). Exactly one of {id, title, symbol, url}
+ * must be provided. Returns the resolved tab and confirms the pin.
+ */
+export async function pin({ id, title, symbol, url } = {}) {
+  const provided = [id, title, symbol, url].filter(v => v !== undefined && v !== null && v !== '').length;
+  if (provided !== 1) {
+    throw new Error('tab_pin requires exactly one of: id, title, symbol, url');
+  }
+
+  const all = await picker();
+  let match;
+  if (id) {
+    match = all.tabs.find(t => t.id === id);
+    if (!match) throw new Error(`No tab with id=${id}. Use tab_picker to list tabs.`);
+  } else if (title) {
+    const needle = title.toLowerCase();
+    match = all.tabs.find(t => (t.title || '').toLowerCase().includes(needle));
+    if (!match) throw new Error(`No tab title matches "${title}"`);
+  } else if (symbol) {
+    const needle = symbol.toLowerCase();
+    match = all.tabs.find(t => (t.symbol || '').toLowerCase().includes(needle));
+    if (!match) throw new Error(`No tab symbol matches "${symbol}"`);
+  } else if (url) {
+    const needle = url.toLowerCase();
+    match = all.tabs.find(t => (t.url || '').toLowerCase().includes(needle));
+    if (!match) throw new Error(`No tab url matches "${url}"`);
+  }
+
+  setPin(match.id);
+  return { success: true, action: 'pinned', pinned_to: match };
+}
+
+export async function unpin() {
+  const prev = getPin();
+  clearPin();
+  return { success: true, action: 'unpinned', previous_pin: prev };
+}
+
+/**
+ * Close a tab by exact CDP target id via HTTP /json/close. Replacement for
+ * the broken upstream tab_close (Electron-keyboard path that doesn't work on Chrome).
+ */
+export async function closeById({ id }) {
+  if (!id) throw new Error('tab_close_by_id requires id');
+
+  const before = await list();
+  const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/close/${encodeURIComponent(id)}`);
+  const text = await resp.text();
+
+  // /json/close returns "Target is closing" on success.
+  const ok = resp.ok && /closing/i.test(text);
+  if (!ok) throw new Error(`CDP /json/close returned ${resp.status}: ${text}`);
+
+  // If we just closed the pinned tab, clear the pin.
+  if (getPin() === id) clearPin();
+
+  await new Promise(r => setTimeout(r, 500));
+  const after = await list();
+  return {
+    success: true,
+    action: 'closed',
+    target_id: id,
+    tabs_before: before.tab_count,
+    tabs_after: after.tab_count,
+    pin_cleared: getPin() === null && before.tab_count !== after.tab_count,
+  };
 }
 
 /**
