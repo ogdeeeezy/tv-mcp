@@ -55,31 +55,23 @@ export async function newTab() {
 }
 
 /**
- * Close the current tab via keyboard shortcut (Ctrl+W / Cmd+W).
+ * Close the currently-active TV chart tab via CDP /json/close. Replaces the
+ * upstream Electron-keyboard implementation (Ctrl+W / Cmd+W) which never
+ * actually decremented the tab count on Chrome — those shortcuts go to the
+ * page, not the browser chrome, when dispatched via CDP Input.dispatchKeyEvent.
  */
 export async function closeTab() {
   const before = await list();
   if (before.tab_count <= 1) {
-    throw new Error('Cannot close the last tab. Use tv_launch to restart TradingView instead.');
+    throw new Error('Cannot close the last tab. Open another TV chart first.');
   }
 
-  const c = await getClient();
-  const isMac = process.platform === 'darwin';
-  const mod = isMac ? 4 : 2;
+  // "Currently active" = the target our CDP client is bound to.
+  const { getTargetInfo } = await import('../connection.js');
+  const target = await getTargetInfo();
+  if (!target?.id) throw new Error('No active CDP target. Connect to a TV tab first.');
 
-  await c.Input.dispatchKeyEvent({
-    type: 'keyDown',
-    modifiers: mod,
-    key: 'w',
-    code: 'KeyW',
-    windowsVirtualKeyCode: 87,
-  });
-  await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'w', code: 'KeyW' });
-
-  await new Promise(r => setTimeout(r, 1000));
-
-  const after = await list();
-  return { success: true, action: 'tab_closed', tabs_before: before.tab_count, tabs_after: after.tab_count };
+  return closeById({ id: target.id });
 }
 
 /**
