@@ -4,9 +4,10 @@
 
 ## Immediate next steps
 
-1. **Finish Phase 3** — only one item left: stub `tv_launch` in `src/tools/health.js` to delegate to `chrome_launch` (with deprecation notice). The chart_scroll_to_date + 5 other `evaluate is not defined` bugs and the `tab_close` Chrome-vs-Electron bug are already fixed and pushed in `c89efd5`.
-2. **Phase 4 — wire-in.** Add tv-mcp to `~/.claude/settings.json` MCP registrations. Document the dual-registration pattern (two MCP processes with different `TV_MCP_TARGET_FILTER` env vars → parallel TV sessions, no collisions). Deregister upstream `tradingview-mcp` once verified working.
-3. **Live-TV smoke test.** Boot the server against an actual Chrome+TV session and exercise: `tab_picker` → `tab_pin symbol=GC1!` → `chart_get_state` → `tab_unpin`. The audit's whole point was multi-tab non-collision; nothing's been validated against a real chart yet.
+1. **Phase 3 — DONE.** `tv_launch` in `src/tools/health.js` now delegates to `diag.chromeLaunch` with a `deprecation_notice` field. 29/29 unit tests pass. Old `core.launch` (TradingView Desktop / Electron path detection) is dead code now — can be deleted in a follow-up.
+2. **Phase 4 — wire-in DONE (pending restart).** `/Users/claudesplayground/.mcp.json` updated: removed dead `tradingview` entry, added six unfiltered lanes `tv-mcp-a` through `tv-mcp-f`. Each lane is identical, idle pins to nothing. **Takes effect on next Claude Code session restart** — the running session still sees the old registration.
+3. **Multi-lane pattern (replaces dual-filter plan).** Decision: do NOT preset filters per symbol. User wants flexibility for any ticker (RBLX, GC1!, anything). Pattern documented in `CLAUDE.md` under "Session opening protocol": agent asks user → `tab_picker` → `tab_pin <symbol|id>`. Each lane is an independent pin slot.
+4. **Still TODO — live-TV smoke test.** Requires restart + Chrome+TV running with CDP. Exercise: `chrome_launch` → `tab_picker` → `tab_pin symbol=<whatever user picks>` → `chart_get_state` → `tab_unpin`. Audit's whole point (multi-tab non-collision) is still unvalidated against a real chart.
 
 ## What landed this session
 
@@ -37,5 +38,5 @@
 
 ## Open questions for user
 
-- Should we deregister upstream `tradingview-mcp` from settings.json immediately after Phase 4 smoke test, or run dual for a session as belt-and-suspenders?
-- For the dual-registration pattern, what names? Suggested: `tv-mcp-gc` (`TV_MCP_TARGET_FILTER=symbol=GC1!`), `tv-mcp-icc` (`title~ICC`).
+- (RESOLVED 2026-05-13) Naming + filter strategy: six unfiltered lanes `tv-mcp-a..f`. User wants any-symbol flexibility, not preset filters. Old `tradingview` entry ripped out.
+- Live smoke test still pending — needs Claude Code restart + Chrome with CDP + user-selected symbol.
