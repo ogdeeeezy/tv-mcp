@@ -1,6 +1,25 @@
 # TradingView MCP — Claude Instructions
 
-68 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+68 tools for reading and controlling a live TradingView Chrome session via CDP (port 9222).
+
+## Session opening protocol (READ THIS FIRST)
+
+Before any chart operation, **ask the user which symbol or chart they want to work on.** Never assume. Then bind a lane to it:
+
+1. Ask: "Which symbol/chart? (e.g., RBLX, GC1!, an open layout title)"
+2. Call `tab_picker` (on whichever `tv-mcp-*` lane is free) to list TradingView tabs currently open in Chrome.
+3. Pin: `tab_pin symbol=<their answer>` — or `tab_pin id=<targetId>` if disambiguating by exact tab. Pin is per-MCP-process state; once set, every subsequent CDP call from this MCP goes to that tab until `tab_unpin`.
+4. From then on, use that lane (`mcp__tv-mcp-a__*` etc.) for that chart for the rest of the session.
+
+If the user wants to work on **multiple charts in parallel**, repeat the pin step on a different lane (`tv-mcp-b`, `tv-mcp-c`, …). Each lane = one independent pin slot.
+
+## Multi-lane registration
+
+`/Users/claudesplayground/.mcp.json` registers six identical unfiltered lanes: `tv-mcp-a` through `tv-mcp-f`. No preset symbols — each lane pins at runtime to whatever the user asks for.
+
+To add more lanes (e.g., for very wide parallel work), append entries with the same shape, incrementing the suffix. Each idle lane is a small node process — keep the total reasonable on memory-constrained machines.
+
+If `tab_picker` returns nothing or `chrome_health` shows CDP unreachable, run `chrome_launch` first.
 
 ## Decision Tree — Which Tool When
 

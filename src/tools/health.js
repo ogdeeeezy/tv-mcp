@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { jsonResult } from './_format.js';
 import * as core from '../core/health.js';
+import * as diag from '../core/diagnostics.js';
 
 export function registerHealthTools(server) {
   server.tool('tv_health_check', 'Check CDP connection to TradingView and return current chart state', {}, async () => {
@@ -18,11 +19,14 @@ export function registerHealthTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('tv_launch', 'Launch TradingView Desktop with Chrome DevTools Protocol (remote debugging) enabled. Auto-detects install location on Mac, Windows, and Linux.', {
+  server.tool('tv_launch', 'DEPRECATED — use chrome_launch. This stub forwards to chrome_launch so existing callers keep working. TradingView Desktop (Electron) targeting was replaced by Chrome CDP after the multi-tab audit.', {
     port: z.coerce.number().optional().describe('CDP port (default 9222)'),
-    kill_existing: z.coerce.boolean().optional().describe('Kill existing TradingView instances first (default true)'),
+    kill_existing: z.coerce.boolean().optional().describe('Kill existing Chrome first (default false in chrome_launch)'),
   }, async ({ port, kill_existing }) => {
-    try { return jsonResult(await core.launch({ port, kill_existing })); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    try {
+      const result = await diag.chromeLaunch({ port, kill_existing });
+      return jsonResult({ ...result, deprecation_notice: 'tv_launch is deprecated; call chrome_launch directly. This wrapper will be removed in a future release.' });
+    }
+    catch (err) { return jsonResult({ success: false, error: err.message, deprecation_notice: 'tv_launch is deprecated; call chrome_launch directly.' }, true); }
   });
 }
