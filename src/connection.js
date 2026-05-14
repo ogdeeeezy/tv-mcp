@@ -1,4 +1,5 @@
 import CDP from 'chrome-remote-interface';
+import { claim as registryClaim, release as registryRelease, releaseAllSync } from './core/pin_registry.js';
 
 let client = null;
 let targetInfo = null;
@@ -33,6 +34,12 @@ function targetMatchesFilter(target, filter) {
   return haystack.toLowerCase().includes(value.toLowerCase());
 }
 
+/**
+ * Set the in-process pin. Does NOT touch the cross-instance registry — callers
+ * that want registry coordination should use claimAndPin() instead. This stays
+ * registry-free so internal reconnect flows (e.g., transient CDP drops) can
+ * rebind without re-claiming.
+ */
 export function setPin(targetId) {
   pinnedTargetId = targetId;
   // Force reconnect on next getClient call so the new pin takes effect immediately.
@@ -46,6 +53,46 @@ export function setPin(targetId) {
 export function clearPin() { setPin(null); }
 export function getPin() { return pinnedTargetId; }
 export function getActiveFilter() { return activeFilter; }
+
+/**
+ * Claim a target in the cross-instance registry, then pin it in-process.
+ * Throws with code=PIN_CONFLICT if another live process owns it (unless force).
+ */
+export async function claimAndPin(targetId, { force = false, lane = null } = {}) {
+  const prev = pinnedTargetId;
+  const result = await registryClaim(targetId, { force, lane });
+  setPin(targetId);
+  // Release any previous pin we held — we're moving to a new tab.
+  if (prev && prev !== targetId) {
+    try { await registryRelease(prev); } catch {}
+  }
+  return result;
+}
+
+/**
+ * Release the cross-instance claim AND clear the in-process pin.
+ */
+export async function releaseAndUnpin() {
+  const prev = pinnedTargetId;
+  setPin(null);
+  if (prev) {
+    return registryRelease(prev);
+  }
+  return { released: false };
+}
+
+// Best-effort cleanup on process exit so we don't leave stale claims behind.
+// Idempotent — releaseAllSync swallows its own errors.
+let _exitHandlerRegistered = false;
+function ensureExitHandler() {
+  if (_exitHandlerRegistered) return;
+  _exitHandlerRegistered = true;
+  const cleanup = () => releaseAllSync();
+  process.on('exit', cleanup);
+  process.on('SIGINT', () => { cleanup(); process.exit(130); });
+  process.on('SIGTERM', () => { cleanup(); process.exit(143); });
+}
+ensureExitHandler();
 
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
