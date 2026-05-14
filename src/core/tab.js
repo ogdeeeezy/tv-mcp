@@ -2,7 +2,8 @@
  * Core tab management logic.
  * Controls TradingView Desktop tabs via CDP and Electron keyboard shortcuts.
  */
-import { getClient, evaluate, setPin, clearPin, getPin } from '../connection.js';
+import { getClient, evaluate, setPin, clearPin, getPin, claimAndPin, releaseAndUnpin } from '../connection.js';
+import * as registry from './pin_registry.js';
 
 const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
@@ -107,7 +108,7 @@ export async function picker() {
  * title/symbol/url (case-insensitive). Exactly one of {id, title, symbol, url}
  * must be provided. Returns the resolved tab and confirms the pin.
  */
-export async function pin({ id, title, symbol, url } = {}) {
+export async function pin({ id, title, symbol, url, force = false } = {}) {
   const provided = [id, title, symbol, url].filter(v => v !== undefined && v !== null && v !== '').length;
   if (provided !== 1) {
     throw new Error('tab_pin requires exactly one of: id, title, symbol, url');
@@ -132,14 +133,45 @@ export async function pin({ id, title, symbol, url } = {}) {
     if (!match) throw new Error(`No tab url matches "${url}"`);
   }
 
-  setPin(match.id);
-  return { success: true, action: 'pinned', pinned_to: match };
+  // Claim in the cross-instance registry before binding in-process.
+  let claim;
+  try {
+    claim = await claimAndPin(match.id, { force });
+  } catch (err) {
+    if (err.code === 'PIN_CONFLICT') {
+      return {
+        success: false,
+        error: err.message,
+        conflict: true,
+        owner: err.owner,
+        candidate: match,
+        hint: 'Pass force=true to override the existing claim, or pick a different tab.',
+      };
+    }
+    throw err;
+  }
+
+  return {
+    success: true,
+    action: 'pinned',
+    pinned_to: match,
+    registry_entry: claim.entry,
+    displaced: claim.displaced || null,
+  };
 }
 
 export async function unpin() {
   const prev = getPin();
-  clearPin();
+  await releaseAndUnpin();
   return { success: true, action: 'unpinned', previous_pin: prev };
+}
+
+/**
+ * Read-only view of the cross-instance pin registry. Dead-PID entries are
+ * pruned as a side effect of reading.
+ */
+export async function registryList() {
+  return registry.list();
 }
 
 /**

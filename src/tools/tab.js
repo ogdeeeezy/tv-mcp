@@ -30,17 +30,18 @@ export function registerTabTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('tab_pin', 'Pin the MCP to a specific tab so all subsequent calls target it. Pass exactly one of: id, title, symbol, url. Cleared on tab_unpin or process exit.', {
+  server.tool('tab_pin', 'Pin the MCP to a specific tab so all subsequent calls target it. Pass exactly one of: id, title, symbol, url. Claims the tab in the cross-instance pin registry (~/.tv-mcp-registry.json) — if another live Claude session already owns this tab, the call returns {conflict: true, owner: {...}} unless force=true. Cleared on tab_unpin or process exit.', {
     id: z.string().optional().describe('Exact CDP target id (from tab_picker)'),
     title: z.string().optional().describe('Substring match on tab title (case-insensitive)'),
     symbol: z.string().optional().describe('Substring match on symbol (e.g. "GC1!", "ICC")'),
     url: z.string().optional().describe('Substring match on URL (e.g. "/chart/Wfn4")'),
+    force: z.boolean().optional().describe('Override an existing cross-instance claim. Use only when you know the other process is stuck or you intend to take over.'),
   }, async (args) => {
     try { return jsonResult(await core.pin(args)); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('tab_unpin', 'Clear the tab pin. Reverts to default-tab selection.', {}, async () => {
+  server.tool('tab_unpin', 'Clear the tab pin and release the cross-instance registry claim. Reverts to default-tab selection.', {}, async () => {
     try { return jsonResult(await core.unpin()); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
@@ -49,6 +50,11 @@ export function registerTabTools(server) {
     id: z.string().describe('CDP target id (from tab_list or tab_picker)'),
   }, async ({ id }) => {
     try { return jsonResult(await core.closeById({ id })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('tab_registry', 'Read-only view of the cross-instance pin registry. Shows every tab currently claimed by any live tv-mcp process (across all Claude sessions). Use this BEFORE tab_pin to see whether another session already owns the tab you want.', {}, async () => {
+    try { return jsonResult(await core.registryList()); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 }
