@@ -2,6 +2,54 @@
 
 69 tools for reading and controlling a live TradingView Chrome session via CDP (port 9222).
 
+## Chrome setup (READ BEFORE session opening protocol)
+
+The MCP talks to Chrome over CDP on port 9222. Before anything else works, Chrome must be running with the debug port bound — and Chrome 136+ refuses to bind that port on the default user-data-dir as an anti-credential-theft measure. **The fix is non-negotiable: launch Chrome with `--user-data-dir=<non-default>`.**
+
+### On this machine (claudesplayground)
+
+Durable isolated profile lives at:
+
+```
+~/Library/Application Support/tv-mcp-chrome
+```
+
+Signed in as `withthechefboy@gmail.com`. Chrome Sync brings in extensions and bookmarks automatically; the TradingView login is local to this profile (TV is not on Google sync). This is a separate Chrome instance from the user's main browsing Chrome — both can run side-by-side as different dock icons.
+
+To launch (or check it's already up):
+
+```
+chrome_launch user_data_dir="~/Library/Application Support/tv-mcp-chrome"
+```
+
+`chrome_launch` is idempotent — if CDP is already alive on 9222, it returns early with the existing state. Run it at session start as a no-cost sanity check.
+
+### Failure-mode dictionary
+
+If you see one of these symptoms, the cause is almost always Chrome-profile-related, not network or firewall:
+
+| Symptom | Real cause | Fix |
+|---|---|---|
+| `chrome_launch` returns `success: false, action: "launched_but_not_responsive"` | Chrome 136+ refused to bind 9222 on the default profile path | Re-run with `user_data_dir="~/Library/Application Support/tv-mcp-chrome"` |
+| `chrome_health` returns `alive: false, error: "fetch failed"` | Same. Port never bound. | Same. |
+| `lsof -i :9222` returns nothing despite a Chrome process being alive with `--remote-debugging-port=9222` in its args | Same. The flag is accepted by Chrome's argv parser but the security check rejects binding. | Same. |
+| `chrome_launch` succeeds, `tab_picker` returns 0 tabs | Right profile, but no TV tab open yet | User needs to open `https://www.tradingview.com/` in the isolated Chrome window |
+| `tab_pin symbol=GC1!` returns success but the wrong tab gets pinned | Title regex didn't extract `symbol` from this tab's title format | Use `tab_pin title=...` or `tab_pin url=...` instead (see Known gotchas) |
+
+### What NOT to waste time on
+
+These were explored exhaustively when the Chrome 136+ block was first hit — they are all dead ends:
+
+- **Firewall / Tailscale / VPN debugging.** Chrome never binds the port, so no firewall has a chance to interfere. Network stack is fine.
+- **Killing and relaunching Chrome with the default profile.** Same restriction fires every single time.
+- **Trying different ports.** Port 9222 is fine; the block is profile-based.
+- **Passing the default profile path explicitly via `--user-data-dir`.** Chrome's check is path-based ("does this resolve to the OS-default location") not flag-presence-based. Explicit-default also fails.
+- **Singleton-attach hypothesis.** Was the initial wrong guess. Even with all Chrome processes killed first, the default-profile launch still fails identically.
+
+### Two-Chrome pattern
+
+User keeps their normal default-profile Chrome for browsing. The tv-mcp Chrome (isolated profile) is launched only when MCP work is happening. Both can run simultaneously; macOS handles two Chrome instances cleanly. When you're done with MCP work, the tv-mcp Chrome can be closed to free RAM — the profile data persists at `~/Library/Application Support/tv-mcp-chrome` for next time.
+
 ## Session opening protocol (READ THIS FIRST)
 
 Before any chart operation, **ask the user which symbol or chart they want to work on.** Never assume. Then bind a lane to it:
@@ -154,10 +202,44 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 - OHLCV capped at 500 bars, trades at 20 per request
 - Pine labels capped at 50 per study by default (pass `max_labels` to override)
 
+## Known gotchas
+
+### Symbol regex misses titles without parentheses
+
+`core/tab.js`'s `picker()` parses a tab's symbol from titles like `GOLD FUTURES (GC1!), 4h Chart — TradingView`. TradingView's actual title format on many charts is `GC1! 4,556.9 ▼ −2.74% gold` — no parenthesized symbol, no comma. The regex returns `null` and `tab_pin symbol=GC1!` then fails to find any match (the substring is matched against the parsed `symbol` field, which is null).
+
+Workaround: pin by `title` or `url` instead. Both are reliable.
+
+```
+tab_pin title="GC1!"                              ← matches title substring
+tab_pin url="COMEX%3AGC1"                         ← matches URL substring
+tab_pin id="15C6AD0557CC790397DFA4584B62CD02"     ← exact CDP target id
+```
+
+The regex could be widened in `core/tab.js` to also detect leading-symbol titles, but the workaround above is dependable and the cost of broadening the regex is more false positives.
+
+### MCP server processes don't hot-reload
+
+The six `tv-mcp-a` through `tv-mcp-f` processes are spawned by Claude Code at session start and read the code that exists *at that moment*. If you modify `src/` mid-session, the running processes keep using the old code — your changes only take effect on the next Claude Code session restart. The lanes shown in `claude mcp list` look fine because they're still alive; they just have stale logic.
+
+How to confirm a running lane is stale: call a tool you know was added recently. If it's not registered, the lane is pre-change. The standard recovery is a Claude Code restart — there is no per-process hot reload.
+
+### `chrome_launch`'s 5-second wait can be a false negative
+
+`chrome_launch` polls CDP for 5 seconds after starting Chrome. On a truly cold launch (system was idle, profile is large, Chrome is paging in), CDP can take 6–10s to come up — `chrome_launch` then returns `launched_but_not_responsive` even though Chrome is fine. Always probe `chrome_health` once after a `launched_but_not_responsive` response before assuming failure. The Chrome 136+ block is permanent (lsof never shows the port); a slow-cold-start is transient (lsof will show the port shortly).
+
+### Pin state vs. registry state
+
+`setPin` / `clearPin` in `connection.js` are in-process-only (used for internal reconnect on transient CDP drops). `claimAndPin` / `releaseAndUnpin` also touch the cross-instance registry. The `tab_pin` and `tab_unpin` tools go through the registry-aware path. If you add a new internal reconnect flow, use the bare `setPin` — do not double-claim in the registry on every reconnect.
+
 ## Architecture
 
 ```
-Claude Code ←→ MCP Server (stdio) ←→ CDP (localhost:9222) ←→ TradingView Desktop (Electron)
+Claude Code ←→ MCP Server (stdio) ←→ CDP (localhost:9222) ←→ Chrome (isolated user-data-dir)
+                                                                  ↓
+                                                          TradingView web app
 ```
+
+Phase 3 (2026-05) deprecated the original TradingView Desktop / Electron path. `tv_launch` now delegates to `chrome_launch`. The MCP only talks to web-Chrome; there is no Electron path left.
 
 Pine graphics path: `study._graphics._primitivesCollection.dwglines.get('lines').get(false)._primitivesDataById`
