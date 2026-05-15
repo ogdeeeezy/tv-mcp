@@ -1,22 +1,25 @@
 # TradingView MCP Bridge
 
-Personal AI assistant for your TradingView Desktop charts. Connects Claude Code to your locally running TradingView app via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation.
+Personal AI assistant for your TradingView charts running in Chrome. Connects Claude Code to a local Chrome session displaying TradingView via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation.
 
 > [!WARNING]
-> **This tool is not affiliated with, endorsed by, or associated with TradingView Inc.** It interacts with your locally running TradingView Desktop application via Chrome DevTools Protocol. Review the [Disclaimer](#disclaimer) before use.
+> **This tool is not affiliated with, endorsed by, or associated with TradingView Inc.** It interacts with your locally running TradingView session (running in Chrome) via Chrome DevTools Protocol. Review the [Disclaimer](#disclaimer) before use.
 
 > [!IMPORTANT]
-> **Requires a valid TradingView subscription.** This tool does not bypass or circumvent any TradingView paywall or access control. It reads from and controls the TradingView Desktop app already running on your machine.
+> **Requires a valid TradingView subscription.** This tool does not bypass or circumvent any TradingView paywall or access control. It reads from and controls the TradingView session already running in Chrome on your machine.
 
 > [!NOTE]
 > **All data processing occurs locally on your machine.** No TradingView data is transmitted, stored, or redistributed externally by this tool.
 
 > [!CAUTION]
-> This tool accesses undocumented internal TradingView APIs via the Electron debug interface. These can change or break without notice in any TradingView update. Pin your TradingView Desktop version if stability matters to you.
+> This tool accesses undocumented internal TradingView web-app APIs via Chrome DevTools Protocol. These can change or break without notice in any TradingView update. Pin your Chrome version if stability matters to you.
+
+> [!IMPORTANT]
+> **Chrome 136+ requires `--user-data-dir=<non-default>`.** Chrome refuses to bind the debug port on the default profile as an anti-credential-theft measure. The MCP launches an isolated profile automatically. See `CLAUDE.md` ("Chrome setup") for the full failure-mode dictionary and the durable profile path used on this machine.
 
 ## How It Works (and why it's safe to run)
 
-This tool does not connect to TradingView's servers, modify any TradingView files, or intercept any network traffic. It communicates exclusively with your locally running TradingView Desktop instance via Chrome DevTools Protocol (CDP) — a standard debugging interface built into all Chromium/Electron applications by Google, including VS Code, Slack, and Discord.
+This tool does not connect to TradingView's servers, modify any TradingView files, or intercept any network traffic. It communicates exclusively with your locally running Chrome (displaying TradingView) via Chrome DevTools Protocol (CDP) — a standard debugging interface built into all Chromium-based applications by Google, including VS Code, Slack, and Discord.
 
 The debug port is disabled by default and must be explicitly enabled by you using a standard Chromium flag (`--remote-debugging-port=9222`). Nothing happens without that deliberate step.
 
@@ -24,10 +27,10 @@ The debug port is disabled by default and must be explicitly enabled by you usin
 
 - Connect to TradingView's servers or APIs
 - Store, transmit, or redistribute any market data
-- Work without a valid TradingView subscription and installed Desktop app
+- Work without a valid TradingView subscription and Chrome browser
 - Bypass any TradingView paywall or access restriction
 - Execute real trades (chart interaction only)
-- Work if TradingView changes their internal Electron structure
+- Work if TradingView changes their internal web app structure
 
 ## Research Context
 
@@ -47,7 +50,7 @@ See [RESEARCH.md](RESEARCH.md) for open questions, findings, and related work.
 
 ## Prerequisites
 
-- **TradingView Desktop app** (paid subscription required for real-time data)
+- **TradingView account + Chrome** (paid subscription required for real-time data)
 - **Node.js 18+**
 - **Claude Code** with MCP support (for MCP tools) or any terminal (for CLI)
 - **macOS, Windows, or Linux**
@@ -88,7 +91,7 @@ npm install
 
 ### 2. Launch TradingView with CDP
 
-TradingView Desktop must be running with Chrome DevTools Protocol enabled on port 9222.
+Chrome must be running with `--remote-debugging-port=9222` AND `--user-data-dir=<non-default>` (Chrome 136+ requirement — see CLAUDE.md). Open TradingView in that Chrome instance.
 
 **Mac:**
 ```bash
@@ -182,7 +185,7 @@ tv screenshot / discover / ui-state / range / scroll
 
 ## Streaming
 
-The `tv stream` commands poll your locally running TradingView Desktop instance at regular intervals via Chrome DevTools Protocol on localhost.
+The `tv stream` commands poll your local Chrome (with TradingView open) at regular intervals via Chrome DevTools Protocol on localhost.
 
 No connection is made to TradingView's servers. All data stays on your machine.
 
@@ -348,7 +351,7 @@ npm test
 ## Architecture
 
 ```
-Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  TradingView Desktop (Electron)
+Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  Chrome (isolated user-data-dir, TradingView open)
 ```
 
 - **Transport**: MCP over stdio (78 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
@@ -373,15 +376,15 @@ This project is provided **for personal, educational, and research purposes only
 By using this software, you acknowledge and agree that:
 
 1. **You are solely responsible** for ensuring your use of this tool complies with [TradingView's Terms of Use](https://www.tradingview.com/policies/) and all applicable laws.
-2. TradingView's Terms of Use **restrict automated data collection, scraping, and non-display usage** of their platform and data. This tool uses Chrome DevTools Protocol to programmatically interact with the TradingView Desktop app, which may conflict with those terms.
+2. TradingView's Terms of Use **restrict automated data collection, scraping, and non-display usage** of their platform and data. This tool uses Chrome DevTools Protocol to programmatically interact with the TradingView account + Chrome, which may conflict with those terms.
 3. **You assume all risk** associated with using this tool. The authors are not responsible for any account bans, suspensions, legal actions, or other consequences resulting from its use.
 4. This tool **must not be used** for, including but not limited to:
    - Redistributing, reselling, or commercially exploiting TradingView's market data
    - Circumventing TradingView's access controls or subscription restrictions
    - Performing automated trading or algorithmic decision-making using extracted data
    - Violating the intellectual property rights of Pine Script indicator authors
-   - Connecting to TradingView's servers or infrastructure (all access is via the locally running Desktop app)
-5. The streaming functionality monitors your locally running TradingView Desktop instance only. It does not connect to TradingView's servers or extract data from TradingView's infrastructure.
+   - Connecting to TradingView's servers or infrastructure (all access is via your local Chrome running TradingView)
+5. The streaming functionality monitors your local Chrome instance (with TradingView loaded) only. It does not connect to TradingView's servers or extract data from TradingView's infrastructure.
 6. Market data accessed through this tool remains subject to exchange and data provider licensing terms. **Do not redistribute, store, or commercially exploit any data obtained through this tool.**
 7. This tool accesses internal, undocumented TradingView application interfaces that may change or break at any time without notice.
 

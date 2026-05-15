@@ -76,6 +76,35 @@ export async function closeTab() {
 }
 
 /**
+ * Extract the trading symbol from a TradingView tab title.
+ *
+ * Two known formats seen in the wild:
+ *   1. `GOLD FUTURES (GC1!), 4h Chart Online — TradingView`
+ *      → parenthesized symbol before a comma. Older format.
+ *   2. `GC1! 4,557.2 ▼ −2.73% gold`
+ *      → leading symbol followed by a price. Format observed on COMEX
+ *      futures tabs on TradingView's current web app (2026-05+).
+ *
+ * Returns the symbol string (e.g. "GC1!", "RBLX", "BTCUSDT") or null if
+ * neither format matches. Callers should fall back to title/url substring
+ * matching when null.
+ */
+export function parseSymbolFromTitle(title) {
+  if (!title || typeof title !== 'string') return null;
+  // Format 1: parenthesized symbol — "(GC1!),"
+  const paren = title.match(/\(([^)]+)\)\s*,/);
+  if (paren) return paren[1];
+  // Format 2: leading symbol followed by whitespace + a price digit.
+  // Symbol body allows uppercase, digits, !, ., :, - to cover edge cases
+  // like BTCUSDT, ES1!, BRK.B, BINANCE:BTCUSDT, EUR-USD. The first char
+  // must be uppercase letter so we don't accidentally pick up numbers or
+  // sentence-case words like "Loading..." or "TradingView".
+  const leading = title.match(/^([A-Z][A-Z0-9!.:-]*)\s+[\d,]/);
+  if (leading) return leading[1];
+  return null;
+}
+
+/**
  * Enriched list of TV tabs for human/AI selection. Includes pin state.
  * Adds chart_id, symbol (parsed from title), pinned flag.
  */
@@ -85,20 +114,15 @@ export async function picker() {
   const pinId = getPin();
 
   const tvPages = targets.filter(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url));
-  const tabs = tvPages.map((t, i) => {
-    // TV titles look like: "GOLD FUTURES (GC1!), 4h Chart Online — TradingView"
-    // Symbol is the parenthetical before " Chart".
-    const symbolMatch = t.title.match(/\(([^)]+)\)\s*,/);
-    return {
-      index: i,
-      id: t.id,
-      title: t.title.replace(/^Live stock.*charts on /, '').replace(/\s*[-—]\s*TradingView$/, ''),
-      symbol: symbolMatch ? symbolMatch[1] : null,
-      url: t.url,
-      chart_id: t.url.match(/\/chart\/([^/?]+)/)?.[1] || null,
-      pinned: t.id === pinId,
-    };
-  });
+  const tabs = tvPages.map((t, i) => ({
+    index: i,
+    id: t.id,
+    title: t.title.replace(/^Live stock.*charts on /, '').replace(/\s*[-—]\s*TradingView$/, ''),
+    symbol: parseSymbolFromTitle(t.title),
+    url: t.url,
+    chart_id: t.url.match(/\/chart\/([^/?]+)/)?.[1] || null,
+    pinned: t.id === pinId,
+  }));
 
   return { success: true, tab_count: tabs.length, pinned_id: pinId, tabs };
 }
