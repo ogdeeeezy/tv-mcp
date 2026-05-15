@@ -1,5 +1,26 @@
 # PROGRESS-tv-mcp
 
+## Session 2: 2026-05-15 — Registry, live smoke test, polish
+
+### Done
+- **Cross-instance pin registry** (`15e5370`) — file-backed claim map at `~/.tv-mcp-registry.json` with lockfile, atomic writes, dead-PID pruning, force-override. New `tab_registry` tool. 20 unit tests including real-subprocess conflict races.
+- **Documentation pass** (`f0b2bd1`, `94194f9`) — CLAUDE.md gained "Chrome setup" section (Chrome 136+ default-profile block + failure-mode dictionary + isolated profile location) and "Known gotchas" (symbol regex, MCP-no-hot-reload, 5s-wait false negatives, pin-state-vs-registry-state). HANDOFF updated.
+- **Polish** (`55a55e6`) — `parseSymbolFromTitle` exported and now handles both old `(GC1!),` and new `GC1! 4,557.2 ▼` title formats; old `core.launch` (Electron path detection) removed; CLI `tv launch` re-pointed to `diag.chromeLaunch` with `--user-data-dir` support; README de-Electron'd. 14 new parser tests.
+- **Live smoke test on GC1!** — `tv-mcp-a`: chrome_launch (isolated profile) → tab_picker → tab_pin title=GC1! → chart_get_state returned `COMEX:GC1!, resolution=240, 12 studies incl. W-Bottom v6b + ICC v3 Strategy` → tab_unpin. Audit's headline multi-tab non-collision scenario validated against a real chart.
+- **63/63 unit tests pass.** Live e2e still skipped (requires CDP + opened TV tabs).
+
+### Decisions
+- Chrome 136+ workaround: durable isolated profile at `~/Library/Application Support/tv-mcp-chrome` signed in as `withthechefboy@gmail.com`. Chrome Sync brings extensions; TV login is local-only. Two-Chrome side-by-side pattern (default for browsing, isolated for MCP).
+- Registry is **tab-scoped, not lane-scoped** — six lanes × N sessions all coordinate on a shared targetId map. Force-override returns the displaced owner for telemetry.
+- Symbol regex extracted to a pure, tested function rather than widened-in-place. Easier to add new TradingView title formats as they appear.
+
+### Next
+- (Optional) live two-session registry race against a real Chrome tab — code is unit-tested via subprocess workers but the actual multi-Claude-session scenario has never run.
+- Tradibos strategy work — context switched to `~/tradibos/` on H2 (`ssh root@100.123.131.45`). Read STRATEGIES-tradibos.md before any new strategy or deploy decision.
+- README is mostly de-Electron'd but mentions of `tv launch` scripts (scripts/launch_tv_debug_mac.sh etc.) may now point at stale shell scripts — confirm those still work or flag stale.
+
+---
+
 ## Session 1: 2026-05-11 — Fork + Phase 1/2/3-partial
 
 ### Done
