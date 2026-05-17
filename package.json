@@ -1,6 +1,6 @@
 {
-  "name": "tradingview-mcp",
-  "version": "1.1.0",
+  "name": "tv-mcp",
+  "version": "1.0.0",
   "description": "MCP server + CLI bridging Claude Code to TradingView running in Chrome (via Chrome DevTools Protocol).",
   "type": "module",
   "main": "src/server.js",
