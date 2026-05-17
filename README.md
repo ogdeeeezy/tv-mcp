@@ -1,5 +1,9 @@
 # TradingView MCP Bridge
 
+[![CI](https://github.com/ogdeeeezy/tv-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ogdeeeezy/tv-mcp/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-3fb950)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Personal AI assistant for your TradingView charts running in Chrome. Connects Claude Code to a local Chrome session displaying TradingView via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation.
 
 > [!WARNING]
@@ -71,34 +75,46 @@ Gives your AI assistant eyes and hands on your own chart:
 - **CLI access** — every MCP tool is also a `tv` CLI command, pipe-friendly with JSON output
 - **Launch TradingView** — auto-detect and launch with debug mode from any platform
 
-## Install with Claude Code
-
-Paste this into Claude Code and it will handle the rest:
-
-> Install the TradingView MCP server. Clone https://github.com/tradesdontlie/tradingview-mcp.git, run npm install, add it to my MCP config at ~/.claude/.mcp.json, and launch TradingView with the debug port. Then verify the connection with tv_health_check.
-
-Or follow the manual steps below.
-
-## Quick Start
-
-### 1. Install
+## Quick Start (5 minutes)
 
 ```bash
-git clone https://github.com/tradesdontlie/tradingview-mcp.git
-cd tradingview-mcp
+git clone https://github.com/ogdeeeezy/tv-mcp.git
+cd tv-mcp
 npm install
+npm run setup
 ```
 
-### 2. Launch Chrome with CDP
+That's it for the setup side. `npm run setup` will:
 
-Chrome must be running with `--remote-debugging-port=9222` AND `--user-data-dir=<non-default-path>`. The non-default `user-data-dir` is **not optional** — Chrome 136+ refuses to bind the debug port on the default profile path as an anti-credential-theft measure. See CLAUDE.md "Chrome setup" for the full failure-mode dictionary.
+1. Create an isolated Chrome profile (so Chrome 136+ will let it bind the debug port — required, not optional)
+2. Launch Chrome against that profile with `--remote-debugging-port=9222`
+3. Print a six-lane `mcp_config` block ready to paste into Claude Code
 
-**Recommended: use the MCP tool** (idempotent — returns early if Chrome+CDP is already up):
-> "Use chrome_launch with user_data_dir set to ~/Library/Application Support/tv-mcp-chrome"
+Then **three manual steps**:
 
-This creates a durable isolated Chrome profile separate from your everyday browser. Sign in to TradingView once inside that Chrome window; the login persists.
+1. In the new Chrome window, open <https://www.tradingview.com/chart/> and log in.
+2. Copy the `mcp_config` JSON the script printed into `~/.claude/.mcp.json` (merge with any existing `mcpServers`).
+3. Restart Claude Code, then ask: *"Use tv_health_check to verify TradingView is connected."*
 
-**Or launch Chrome manually:**
+### Why the isolated profile is mandatory
+
+Starting in Chrome 136 (April 2025), Google's anti-credential-theft check refuses to bind `--remote-debugging-port` when the user-data-dir resolves to the OS-default Chrome profile. This is non-negotiable and a path-based check — passing the default path explicitly does not bypass it. `npm run setup` handles this for you by creating an isolated profile under your OS-appropriate config location (`~/Library/Application Support/tv-mcp-chrome` on macOS, `~/.config/tv-mcp-chrome` on Linux, `%LOCALAPPDATA%\tv-mcp-chrome` on Windows). Full failure-mode dictionary lives in [`CLAUDE.md`](CLAUDE.md) → "Chrome setup".
+
+### Setup options
+
+```bash
+npm run setup -- --lanes 1                       # single-server config instead of six lanes
+npm run setup -- --user-data-dir /custom/path    # override profile location
+npm run setup -- --port 9333                     # use a different CDP port
+```
+
+### Manual install (if you'd rather not run `npm run setup`)
+
+<details>
+<summary>Click for manual launch + config steps</summary>
+
+Launch Chrome yourself:
+
 ```bash
 # macOS
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
@@ -116,28 +132,28 @@ google-chrome \
   --user-data-dir="%LOCALAPPDATA%\tv-mcp-chrome"
 ```
 
-Then open `https://www.tradingview.com/` in that Chrome window.
-
-### 3. Add to Claude Code
-
-Add to your Claude Code MCP config (`~/.claude/.mcp.json` or project `.mcp.json`):
+Then paste this into `~/.claude/.mcp.json` (substitute the absolute path to your clone for `/path/to/tv-mcp`):
 
 ```json
 {
   "mcpServers": {
-    "tradingview": {
-      "command": "node",
-      "args": ["/path/to/tradingview-mcp/src/server.js"]
-    }
+    "tv-mcp-a": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-b": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-c": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-d": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-e": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-f": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] }
   }
 }
 ```
 
-Replace `/path/to/tradingview-mcp` with your actual path.
+Six identical lanes let you pin different charts in parallel (e.g., `tv-mcp-a` on GC1!, `tv-mcp-b` on RBLX). Drop down to a single `tradingview` entry if you only ever look at one chart at a time.
 
-### 4. Verify
+</details>
 
-Ask Claude: *"Use tv_health_check to verify TradingView is connected"*
+### Verify
+
+Ask Claude: *"Use tv_health_check to verify TradingView is connected."*
 
 ## CLI
 

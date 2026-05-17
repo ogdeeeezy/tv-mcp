@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * tv — CLI for TradingView Desktop via Chrome DevTools Protocol.
+ * tv — CLI for the tv-mcp bridge (TradingView in Chrome via CDP).
  * Outputs JSON to stdout. Errors to stderr.
  * Exit codes: 0 success, 1 error, 2 connection failure.
  *
- * All 70 MCP tools are accessible via CLI commands.
+ * All MCP tools are accessible via CLI commands.
  * Pipe-friendly: every command outputs JSON for use with jq.
  */
 
 // Register all commands
+import './commands/setup.js';
 import './commands/health.js';
 import './commands/chart.js';
 import './commands/data.js';
