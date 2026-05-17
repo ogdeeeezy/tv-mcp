@@ -89,32 +89,34 @@ cd tradingview-mcp
 npm install
 ```
 
-### 2. Launch TradingView with CDP
+### 2. Launch Chrome with CDP
 
-Chrome must be running with `--remote-debugging-port=9222` AND `--user-data-dir=<non-default>` (Chrome 136+ requirement — see CLAUDE.md). Open TradingView in that Chrome instance.
+Chrome must be running with `--remote-debugging-port=9222` AND `--user-data-dir=<non-default-path>`. The non-default `user-data-dir` is **not optional** — Chrome 136+ refuses to bind the debug port on the default profile path as an anti-credential-theft measure. See CLAUDE.md "Chrome setup" for the full failure-mode dictionary.
 
-**Mac:**
+**Recommended: use the MCP tool** (idempotent — returns early if Chrome+CDP is already up):
+> "Use chrome_launch with user_data_dir set to ~/Library/Application Support/tv-mcp-chrome"
+
+This creates a durable isolated Chrome profile separate from your everyday browser. Sign in to TradingView once inside that Chrome window; the login persists.
+
+**Or launch Chrome manually:**
 ```bash
-./scripts/launch_tv_debug_mac.sh
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/Library/Application Support/tv-mcp-chrome"
+
+# Linux
+google-chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.config/tv-mcp-chrome"
+
+# Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir="%LOCALAPPDATA%\tv-mcp-chrome"
 ```
 
-**Windows:**
-```bash
-scripts\launch_tv_debug.bat
-```
-
-**Linux:**
-```bash
-./scripts/launch_tv_debug_linux.sh
-```
-
-**Or launch manually on any platform:**
-```bash
-/path/to/TradingView --remote-debugging-port=9222
-```
-
-**Or use the MCP tool** (auto-detects your install):
-> "Use tv_launch to start TradingView in debug mode"
+Then open `https://www.tradingview.com/` in that Chrome window.
 
 ### 3. Add to Claude Code
 
@@ -327,17 +329,18 @@ Tools return compact output by default to minimize context usage. For a typical 
 | `verbose: true` | Pass on any pine tool to get raw data with IDs/colors when needed |
 | `study_filter` | Target one indicator instead of scanning all |
 
-## Finding TradingView on Your System
+## Verifying CDP is Reachable
 
-Launch scripts and `tv_launch` auto-detect TradingView. If auto-detection fails:
+After `chrome_launch`, confirm the debug port is bound:
 
-| Platform | Common Locations |
-|----------|-----------------|
-| **Mac** | `/Applications/TradingView.app/Contents/MacOS/TradingView` |
-| **Windows** | `%LOCALAPPDATA%\TradingView\TradingView.exe`, `%PROGRAMFILES%\WindowsApps\TradingView*\TradingView.exe` |
-| **Linux** | `/opt/TradingView/tradingview`, `~/.local/share/TradingView/TradingView`, `/snap/tradingview/current/tradingview` |
+```bash
+curl -s http://localhost:9222/json/version | head
+lsof -i :9222
+```
 
-The key flag: `--remote-debugging-port=9222`
+If `lsof` returns nothing, Chrome's anti-credential-theft check is refusing to bind the port — almost always because `--user-data-dir` resolved to Chrome's default profile path. Re-launch with an isolated `--user-data-dir` (see step 2 above).
+
+The MCP-side equivalent: `chrome_health` returns `{ alive: true }` when CDP is reachable.
 
 ## Testing
 

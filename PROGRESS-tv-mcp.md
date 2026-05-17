@@ -1,5 +1,23 @@
 # PROGRESS-tv-mcp
 
+## Session 3: 2026-05-17 — Phase 3 cleanup finish
+
+### Done
+- **README de-Electron pass (final)** — deleted four Electron-era launch scripts (`launch_tv_debug_{mac,linux}.sh`, `launch_tv_debug.{bat,vbs}`). Rewrote README §"Launch TradingView with CDP" → §"Launch Chrome with CDP" with chrome_launch as primary path and explicit manual chrome invocations for mac/linux/windows. Rewrote §"Finding TradingView on Your System" → §"Verifying CDP is Reachable" (the old section listed `TradingView.app` paths, meaningless now that the Electron path is dead). `tv_launch` mention kept since it still works as a deprecation stub.
+- **`test:registry` npm script scope fix** — script was running `pin_registry.test.js` + `tab_picker.test.js` due to an over-eager regex during the polish commit. Trimmed to only `pin_registry.test.js` so the name matches the scope. 20/20 registry tests still pass; tab_picker tests covered by `test`, `test:unit`, `test:all`, `test:verbose`.
+- **Resolved leftover open question** — two-session-one-tab race in HANDOFF: not a real workflow (user runs one tab per lane), no live test needed. Registry's value is dead-PID pruning + force-override, already unit-tested.
+- 63/63 unit tests pass. Only lingering Electron mentions in repo are AUDIT.md:209 (historical) and CLAUDE.md:243 (the explicit Phase 3 deprecation note) — both intentional.
+
+### Decisions
+- README launch flow now leads with the MCP tool (`chrome_launch`) rather than shell scripts. Manual chrome invocations included as a fallback for users who haven't wired up the MCP yet, but no longer the headline path.
+- Did not touch README's MCP-config example (still shows single `"tradingview"` server). The six-lane `tv-mcp-a..f` pattern lives in CLAUDE.md and the user's `~/.mcp.json`. Open question whether README should advertise multi-lane or keep the simple single-server example — left for next session.
+
+### Next
+- Tradibos context switch — read `STRATEGIES-tradibos.md` on H2 (`ssh root@100.123.131.45`, `/root/tradibos/`). Decide what to do there.
+- (Maybe) update README MCP-config example to show multi-lane registration.
+
+---
+
 ## Session 2: 2026-05-15 — Registry, live smoke test, polish
 
 ### Done
