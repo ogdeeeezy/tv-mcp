@@ -8,6 +8,58 @@ const MAX_TRADES = 20;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
 
+// Detects strategy data sources. Exported as a JS source string because it runs
+// in the TradingView page context via CDP eval. Broader than the original
+// `reportData || performance` check — some strategies (e.g. W-Bottom v6a ATR)
+// don't expose those props on their source object even when the Strategy Tester
+// UI is alive. See https://github.com/ogdeeeezy/tv-mcp/issues/1.
+export const IS_STRATEGY_JS = `function isStrategy(s) {
+  if (!s || !s.metaInfo) return false;
+  try {
+    var meta = s.metaInfo();
+    if (meta.is_price_study !== false) return false;
+    if (meta.is_strategy === true) return true;
+    return !!(s.reportData || s.performance || s.ordersData || s.tradesData || s.equityData || s._orders);
+  } catch(e) { return false; }
+}`;
+
+// Parses the Strategy Tester overview pane (.bottom-widgetbar-content.backtesting)
+// as a fallback when the internal API returns empty metrics. Exported as a JS
+// source string because it runs in the page context via CDP eval. The pane must
+// be open and the "Overview" sub-tab selected.
+export const SCRAPE_STRATEGY_TESTER_JS = `function scrapeStrategyTester() {
+  var el = document.querySelector('.bottom-widgetbar-content.backtesting');
+  if (!el) return null;
+  var text = el.innerText || '';
+  if (!text) return null;
+  var lines = text.split('\\n').map(function(l){return l.trim();}).filter(function(l){return l.length>0;});
+  var labelMap = {
+    'Total P&L': 'net_profit', 'Net Profit': 'net_profit', 'Net profit': 'net_profit',
+    'Max equity drawdown': 'max_drawdown', 'Max drawdown': 'max_drawdown', 'Max Drawdown': 'max_drawdown',
+    'Total trades': 'total_trades', 'Total closed trades': 'total_trades',
+    'Profitable trades': 'percent_profitable', 'Percent profitable': 'percent_profitable',
+    'Profit factor': 'profit_factor', 'Profit Factor': 'profit_factor'
+  };
+  function parseNum(s) {
+    var cleaned = String(s).replace(/[,\\u2009\\s]/g, '').replace(/[\\u2212\\u2013\\u2014]/g, '-');
+    var m = cleaned.match(/-?\\d+\\.?\\d*/);
+    return m ? parseFloat(m[0]) : null;
+  }
+  var metrics = {};
+  for (var i = 0; i < lines.length; i++) {
+    if (labelMap[lines[i]] && i + 1 < lines.length) {
+      var val = parseNum(lines[i+1]);
+      if (val !== null) metrics[labelMap[lines[i]]] = val;
+    }
+  }
+  var meta = {};
+  if (lines[0]) meta.strategy_header = lines[0];
+  for (var j = 0; j < Math.min(lines.length, 6); j++) {
+    if (/\\b\\d{4}\\b/.test(lines[j]) && /[\\-\\u2013\\u2014]/.test(lines[j])) { meta.date_range = lines[j]; break; }
+  }
+  return { metrics: metrics, meta: meta };
+}`;
+
 function buildGraphicsJS(collectionName, mapKey, filter) {
   return `
     (function() {
@@ -135,48 +187,56 @@ export async function getIndicator({ entity_id }) {
 export async function getStrategyResults() {
   const results = await evaluate(`
     (function() {
+      ${IS_STRATEGY_JS}
+      ${SCRAPE_STRATEGY_TESTER_JS}
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
-          var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (isStrategy(sources[i])) { strat = sources[i]; break; }
         }
-        if (!strat) return {metrics: {}, source: 'internal_api', error: 'No strategy found on chart. Add a strategy indicator first.'};
         var metrics = {};
-        if (strat.reportData) {
-          var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
-          if (rd && typeof rd === 'object') {
-            if (typeof rd.value === 'function') rd = rd.value();
-            if (rd) { var keys = Object.keys(rd); for (var k = 0; k < keys.length; k++) { var val = rd[keys[k]]; if (val !== null && val !== undefined && typeof val !== 'function') metrics[keys[k]] = val; } }
+        if (strat) {
+          if (strat.reportData) {
+            var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
+            if (rd && typeof rd === 'object') {
+              if (typeof rd.value === 'function') rd = rd.value();
+              if (rd) { var keys = Object.keys(rd); for (var k = 0; k < keys.length; k++) { var val = rd[keys[k]]; if (val !== null && val !== undefined && typeof val !== 'function') metrics[keys[k]] = val; } }
+            }
           }
+          if (Object.keys(metrics).length === 0 && strat.performance) {
+            var perf = strat.performance();
+            if (perf && typeof perf.value === 'function') perf = perf.value();
+            if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var p = 0; p < pkeys.length; p++) { var pval = perf[pkeys[p]]; if (pval !== null && pval !== undefined && typeof pval !== 'function') metrics[pkeys[p]] = pval; } }
+          }
+          if (Object.keys(metrics).length > 0) return {metrics: metrics, source: 'internal_api'};
         }
-        if (Object.keys(metrics).length === 0 && strat.performance) {
-          var perf = strat.performance();
-          if (perf && typeof perf.value === 'function') perf = perf.value();
-          if (perf && typeof perf === 'object') { var pkeys = Object.keys(perf); for (var p = 0; p < pkeys.length; p++) { var pval = perf[pkeys[p]]; if (pval !== null && pval !== undefined && typeof pval !== 'function') metrics[pkeys[p]] = pval; } }
+        var scraped = scrapeStrategyTester();
+        if (scraped && Object.keys(scraped.metrics).length > 0) {
+          return {metrics: scraped.metrics, source: 'dom_scrape', meta: scraped.meta, note: strat ? 'internal_api returned empty metrics; scraped Strategy Tester DOM' : 'No strategy data source matched in internal API; scraped Strategy Tester DOM'};
         }
-        return {metrics: metrics, source: 'internal_api'};
+        if (!strat) return {metrics: {}, source: 'internal_api', error: 'No strategy found on chart. Add a strategy indicator and open the Strategy Tester panel (DOM-scrape fallback needs the panel visible).'};
+        return {metrics: {}, source: 'internal_api', error: 'Strategy found but reportData/performance returned empty, and Strategy Tester DOM not visible. Open the Strategy Tester panel to enable the DOM-scrape fallback.'};
       } catch(e) { return {metrics: {}, source: 'internal_api', error: e.message}; }
     })()
   `);
-  return { success: true, metric_count: Object.keys(results?.metrics || {}).length, source: results?.source, metrics: results?.metrics || {}, error: results?.error };
+  return { success: true, metric_count: Object.keys(results?.metrics || {}).length, source: results?.source, metrics: results?.metrics || {}, meta: results?.meta, note: results?.note, error: results?.error };
 }
 
 export async function getTrades({ max_trades } = {}) {
   const limit = Math.min(max_trades || 20, MAX_TRADES);
   const trades = await evaluate(`
     (function() {
+      ${IS_STRATEGY_JS}
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
-          var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.ordersData || s.reportData)) { strat = s; break; }
+          if (isStrategy(sources[i])) { strat = sources[i]; break; }
         }
-        if (!strat) return {trades: [], source: 'internal_api', error: 'No strategy found on chart.'};
+        if (!strat) return {trades: [], source: 'internal_api', error: 'No strategy found on chart. If the Strategy Tester shows trades, the internal-API detection missed this strategy type; trade-list DOM scrape is not yet supported.'};
         var orders = null;
         if (strat.ordersData) { orders = typeof strat.ordersData === 'function' ? strat.ordersData() : strat.ordersData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
         if (!orders || !Array.isArray(orders)) {
@@ -204,15 +264,15 @@ export async function getTrades({ max_trades } = {}) {
 export async function getEquity() {
   const equity = await evaluate(`
     (function() {
+      ${IS_STRATEGY_JS}
       try {
         var chart = ${CHART_API}._chartWidget;
         var sources = chart.model().model().dataSources();
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
-          var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (isStrategy(sources[i])) { strat = sources[i]; break; }
         }
-        if (!strat) return {data: [], source: 'internal_api', error: 'No strategy found on chart.'};
+        if (!strat) return {data: [], source: 'internal_api', error: 'No strategy found on chart. Equity-curve DOM scrape not supported (the curve is plotted, not text); use data_get_strategy_results for summary metrics via DOM fallback.'};
         var data = [];
         if (strat.equityData) {
           var eq = typeof strat.equityData === 'function' ? strat.equityData() : strat.equityData;
