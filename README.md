@@ -170,6 +170,7 @@ node src/cli/index.js <command>
 ### Quick Examples
 
 ```bash
+tv setup                           # one-shot: isolated Chrome + MCP config snippet
 tv status                          # check connection
 tv quote                           # current price
 tv symbol AAPL                     # change symbol
@@ -181,10 +182,12 @@ tv pane symbol 1 ES1!              # set pane symbol
 tv stream quote | jq '.close'      # monitor price changes
 ```
 
+`tv setup` is what you run first on a fresh machine — it creates the isolated Chrome profile, launches Chrome with CDP on the right flags, and prints the six-lane `mcp_config` block ready to paste into `~/.claude/.mcp.json`. Equivalent to `npm run setup`.
+
 ### All Commands
 
 ```
-tv status / launch / state / symbol / timeframe / type / info / search
+tv setup / status / launch / state / symbol / timeframe / type / info / search
 tv quote / ohlcv / values
 tv data lines/labels/tables/boxes/strategy/trades/equity/depth/indicator
 tv pine get/set/compile/analyze/check/save/new/open/list/errors/console
