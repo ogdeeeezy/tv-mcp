@@ -4,6 +4,24 @@
 
 ---
 
+## Session 6: 2026-05-18 — v1.0.0 released, README polish, CL position checked
+
+### Done
+- **v1.0.0 tagged + GitHub release published** — annotated tag on `9e26de3`, release at https://github.com/ogdeeeezy/tv-mcp/releases/tag/v1.0.0. Notes cover: one-command onboarding (`npm run setup` / `tv setup`), issue #1 closed end-to-end, 80/80 tests, CI matrix `{ubuntu, macos, windows} × node {18, 20, 22}`, six-lane default, no-npm rationale.
+- **README CLI block polished** (`9e26de3`) — `tv setup` now leads both the Quick Examples and the All Commands list. Added a sentence explaining what it does (isolated profile + CDP launch + config snippet). Was a S4/S5 carry-over.
+- **Schwab CL position sanity-checked** on H2 — log shows position alive (entry $95.64, stop $85.24, trail still inactive), cron running on schedule. Latest 4h close $102.43 → position is **+$6.79/contract unrealized**, not in drawdown. The S5 note about `net_profit` dropping $20,532 → $18,522 was backtest-range MTM drift on the still-open trade, not a live-position issue. No action needed.
+- Token refresh blip 6:15-7:15 AM ET 2026-05-18 (recovered by 8:15) — single transient, no follow-up needed unless it recurs.
+
+### Decisions
+- **Release notes published to GitHub, not as a separate CHANGELOG.md.** Single-source-of-truth at the GitHub release page; if a CHANGELOG ever matters for offline browsing, generate it from `gh release list --json` later.
+
+### Next
+- All shipping-readiness work is done. No carry-overs.
+- Next tv-mcp session opens only on real demand: a friend hits a bug, an upstream change to vendor in, or a new feature ask.
+- Side-channel: schwab CL position remains open and profitable — no tv-mcp dependency.
+
+---
+
 ## Session 5: 2026-05-18 — tv-mcp #1 verified live + deferred unit tests landed
 
 ### Done
