@@ -1,5 +1,26 @@
 # PROGRESS-tv-mcp
 
+## Session 4: 2026-05-18 — Prod-ready packaging (Phase A+B) and npm decision
+
+### Done
+- **Phase A — polish for sharing** (`0641ac9`) — package.json: fixed description (no more "TradingView Desktop"), added repository/homepage/bugs/keywords/license/files/engines/prepublishOnly. LICENSE: added fork copyright (ogdeeeezy 2026) alongside upstream. README: leads with `npm run setup`, six-lane MCP config in headline, manual flow collapsed into `<details>`, CI/Node/License badges at top, all upstream repo URLs fixed to ogdeeeezy/tv-mcp. New `.github/workflows/ci.yml`: matrix on {ubuntu, macos, windows} × node {18, 20, 22} running `test:unit`.
+- **Phase B — `tv setup` command** (`0641ac9`) — `src/cli/commands/setup.js`: one-shot onboarding. Picks OS-appropriate Chrome profile path, creates it, calls `chromeLaunch` idempotently, prints six-lane `mcp_config` block ready to paste. Supports `--lanes 1-26`, `--user-data-dir`, `--port`. 5 new unit tests in `tests/setup.test.js`. Idempotency verified against real isolated profile + already-running Chrome.
+- **Package rename** (`f42345c`) — `name: "tv-mcp"` (matches GitHub), `version: "1.0.0"` (clean milestone).
+- **npm publish abandoned** — hit 2FA wall, generated/used granular access token path, then user pushed back on whether npm was needed at all. Decided no: public clone-from-GitHub already covers the install story end-to-end (`git clone → npm install → npm run setup`). Token revoked.
+- 68/68 unit tests pass. `npm pack --dry-run` clean (74 kB / 60 files) — package is publish-ready if you ever change your mind.
+
+### Decisions
+- **Skipped npm publish.** Friends install via `git clone`. The `tv setup` command does all the heavy lifting (Chrome profile + launch + config snippet) so a global `tv` binary on PATH wasn't worth the npm overhead (token rotation, semver discipline, 2FA setup). Kept `name: tv-mcp` + `version: 1.0.0` in package.json anyway — they match reality whether we publish or not.
+- **Six lanes is the default** for `tv setup` config output (not one). Reasoning: power-user pattern (parallel charts) is also the right newcomer default — extra lanes are idle until used, no downside. `--lanes 1` for users who only want one.
+- **CI runs `test:unit`, not `test`.** Live-CDP e2e tests need a real Chrome + TV tab and aren't reproducible in CI. Unit + setup tests cover the parts that should never regress.
+
+### Next
+- (Optional, ceremonial) `git tag v1.0.0 && gh release create v1.0.0` to mark this as the first publicly-shareable cut.
+- (Maybe) update README's "CLI" section to reflect that `tv setup` exists — it's listed in the help output but the CLI examples block still leads with `tv status` / `tv quote`.
+- Tradibos context switch — read `STRATEGIES-tradibos.md` on H2 (`ssh root@100.123.131.45`, `/root/tradibos/`).
+
+---
+
 ## Session 3: 2026-05-17 — Phase 3 cleanup finish
 
 ### Done
