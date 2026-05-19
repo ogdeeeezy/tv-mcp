@@ -100,6 +100,40 @@ Then **three manual steps**:
 
 Starting in Chrome 136 (April 2025), Google's anti-credential-theft check refuses to bind `--remote-debugging-port` when the user-data-dir resolves to the OS-default Chrome profile. This is non-negotiable and a path-based check — passing the default path explicitly does not bypass it. `npm run setup` handles this for you by creating an isolated profile under your OS-appropriate config location (`~/Library/Application Support/tv-mcp-chrome` on macOS, `~/.config/tv-mcp-chrome` on Linux, `%LOCALAPPDATA%\tv-mcp-chrome` on Windows). Full failure-mode dictionary lives in [`CLAUDE.md`](CLAUDE.md) → "Chrome setup".
 
+### What the config block looks like
+
+`npm run setup` prints this exact JSON. Six identical lanes are the default — each lane can pin a different chart (e.g., `tv-mcp-a` on GC1!, `tv-mcp-b` on RBLX). Substitute the absolute path to your clone for `/path/to/tv-mcp`:
+
+```json
+{
+  "mcpServers": {
+    "tv-mcp-a": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-b": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-c": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-d": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-e": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
+    "tv-mcp-f": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] }
+  }
+}
+```
+
+<details>
+<summary>Single-server variant (one chart at a time)</summary>
+
+If you only ever look at one chart, you can register a single server entry instead. `npm run setup -- --lanes 1` emits this shape:
+
+```json
+{
+  "mcpServers": {
+    "tv-mcp-a": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] }
+  }
+}
+```
+
+The lane name can be anything (e.g., `tradingview`) — the MCP server doesn't care. Six lanes is the recommended default because idle lanes cost almost nothing and parallel-chart workflows are the whole point.
+
+</details>
+
 ### Setup options
 
 ```bash
@@ -111,9 +145,9 @@ npm run setup -- --port 9333                     # use a different CDP port
 ### Manual install (if you'd rather not run `npm run setup`)
 
 <details>
-<summary>Click for manual launch + config steps</summary>
+<summary>Click for manual Chrome launch steps</summary>
 
-Launch Chrome yourself:
+Launch Chrome yourself with the isolated profile:
 
 ```bash
 # macOS
@@ -132,22 +166,7 @@ google-chrome \
   --user-data-dir="%LOCALAPPDATA%\tv-mcp-chrome"
 ```
 
-Then paste this into `~/.claude/.mcp.json` (substitute the absolute path to your clone for `/path/to/tv-mcp`):
-
-```json
-{
-  "mcpServers": {
-    "tv-mcp-a": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
-    "tv-mcp-b": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
-    "tv-mcp-c": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
-    "tv-mcp-d": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
-    "tv-mcp-e": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] },
-    "tv-mcp-f": { "command": "node", "args": ["/path/to/tv-mcp/src/server.js"] }
-  }
-}
-```
-
-Six identical lanes let you pin different charts in parallel (e.g., `tv-mcp-a` on GC1!, `tv-mcp-b` on RBLX). Drop down to a single `tradingview` entry if you only ever look at one chart at a time.
+Then paste the JSON config block (above) into `~/.claude/.mcp.json`, merging with any existing `mcpServers`.
 
 </details>
 

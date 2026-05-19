@@ -204,20 +204,6 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 
 ## Known gotchas
 
-### Symbol regex misses titles without parentheses
-
-`core/tab.js`'s `picker()` parses a tab's symbol from titles like `GOLD FUTURES (GC1!), 4h Chart — TradingView`. TradingView's actual title format on many charts is `GC1! 4,556.9 ▼ −2.74% gold` — no parenthesized symbol, no comma. The regex returns `null` and `tab_pin symbol=GC1!` then fails to find any match (the substring is matched against the parsed `symbol` field, which is null).
-
-Workaround: pin by `title` or `url` instead. Both are reliable.
-
-```
-tab_pin title="GC1!"                              ← matches title substring
-tab_pin url="COMEX%3AGC1"                         ← matches URL substring
-tab_pin id="15C6AD0557CC790397DFA4584B62CD02"     ← exact CDP target id
-```
-
-The regex could be widened in `core/tab.js` to also detect leading-symbol titles, but the workaround above is dependable and the cost of broadening the regex is more false positives.
-
 ### MCP server processes don't hot-reload
 
 The six `tv-mcp-a` through `tv-mcp-f` processes are spawned by Claude Code at session start and read the code that exists *at that moment*. If you modify `src/` mid-session, the running processes keep using the old code — your changes only take effect on the next Claude Code session restart. The lanes shown in `claude mcp list` look fine because they're still alive; they just have stale logic.
