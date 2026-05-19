@@ -4,6 +4,24 @@
 
 ---
 
+## Session 7: 2026-05-19 — v1.0.1 polish & cleanup
+
+### Done
+- **README MCP-config example surfaced** — six-lane JSON block now visible in the main Quick Start flow instead of hidden behind `<details>`. A separate `<details>` collapsible documents the single-server variant for users who only want one lane. Someone reading the README in isolation now sees the correct config shape without running `tv setup`.
+- **Stale "Symbol regex misses titles without parentheses" gotcha removed from `CLAUDE.md`** — the underlying bug was already fixed in `55a55e6` (parser widened to handle both parenthesized and leading-symbol formats, 14 tests covering both shapes + null-return cases). Documentation drift, not new code.
+- **Pre-split backups deleted** — `~/tradingview-mcp.backup-2026-05-11/` (145M) and `~/tv-mcp.rsync-staging-2026-05-11/` (6.7M). `diff -rq` confirmed all unique content is either pre-split tradibos material (lives in `~/tradibos/` now) or deprecated Electron launch scripts (Phase 3 removed). `MCP-AUDIT.md` already merged in as `docs/AUDIT.md` (byte-identical). ~152M reclaimed.
+- **v1.0.1 tagged + GitHub release published** covering "polish & cleanup."
+- 80/80 unit tests still pass.
+
+### Decisions
+- **No new tests for `parseSymbolFromTitle`** — the three categories the task asked for (leading-symbol, parenthesized, null-return) are already covered with 9 cases across the existing suite. Adding redundant tests would just be noise.
+
+### Next
+- No carry-overs. v1.0.1 is the end of the polish pass.
+- Next tv-mcp session opens only on real demand: a friend hits a bug, an upstream change to vendor in, or a new feature ask.
+
+---
+
 ## Session 6: 2026-05-18 — v1.0.0 released, README polish, CL position checked
 
 ### Done
