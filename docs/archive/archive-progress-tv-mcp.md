@@ -63,3 +63,41 @@
 ### Next
 - Tradibos context switch — read `STRATEGIES-tradibos.md` on H2 (`ssh root@100.123.131.45`, `/root/tradibos/`). Decide what to do there.
 - (Maybe) update README MCP-config example to show multi-lane registration.
+
+---
+
+## Session 5: 2026-05-18 — tv-mcp #1 verified live + deferred unit tests landed
+
+### Done
+- **Unit tests for `IS_STRATEGY_JS` + `SCRAPE_STRATEGY_TESTER_JS`** (`ba99a55`) — 12 cases via `vm.runInNewContext` with mock document/sources. Covers all six strategy-data hooks (`reportData / performance / ordersData / tradesData / equityData / _orders`), `is_price_study` gating, throwing `metaInfo`, DOM scrape with U+2212 minus and comma-grouped numbers, alternate label spellings. Wired into `test` / `test:unit` / `test:all` / `test:verbose`. Suite now **80/80** (was 68/68).
+- **Fix from `fd2ded8` verified live** on tv-mcp-b against `NYMEX:CL1!` 4h. `data_get_strategy_results` returned `source: "dom_scrape"`, 5 populated metrics (net_profit 18,522.5, max_drawdown 32,622.5, total_trades 167, percent_profitable 44.31, profit_factor 1.072). Note field reads "internal_api returned empty metrics; scraped Strategy Tester DOM" — exactly the new fallback path firing on v6a charts. Issue #1 fully closed end-to-end.
+
+### Decisions
+- **vm-context object identity gotcha** — `assert.deepEqual({}, vmCtx.emptyMetrics)` fails strict-equality even when both are empty, because the vm-context `{}` has a cross-realm prototype. Switched the empty-metrics test to `Object.keys(...).length === 0`. Worth remembering for any future vm-based test.
+
+### Next
+- (Optional, ceremonial) `git tag v1.0.0 && gh release create v1.0.0` — still open from S4.
+- (Maybe) README "CLI" examples block still leads with `tv status` / `tv quote`, not `tv setup` — also S4 carry-over.
+- (Side-channel) CL backtest `net_profit` dropped $20,532.50 → $18,522.50 between S40 (schwab repo) and now. CL guard prevents new entries; the still-open position (entry $95.64, stop $85.24) is taking unrealized drawdown. Worth a glance at H2 cron logs next schwab session.
+
+---
+
+## Session 4: 2026-05-18 — Prod-ready packaging (Phase A+B) and npm decision
+
+### Done
+- **Phase A — polish for sharing** (`0641ac9`) — package.json: fixed description, added repository/homepage/bugs/keywords/license/files/engines/prepublishOnly. LICENSE: added fork copyright (ogdeeeezy 2026). README: leads with `npm run setup`, six-lane MCP config in headline, manual flow collapsed into `<details>`, CI/Node/License badges at top. New `.github/workflows/ci.yml`: matrix on {ubuntu, macos, windows} × node {18, 20, 22} running `test:unit`.
+- **Phase B — `tv setup` command** (`0641ac9`) — `src/cli/commands/setup.js`: one-shot onboarding. Picks OS-appropriate Chrome profile path, calls `chromeLaunch` idempotently, prints six-lane `mcp_config` block. Supports `--lanes 1-26`, `--user-data-dir`, `--port`. 5 new unit tests in `tests/setup.test.js`. Idempotency verified.
+- **Package rename** (`f42345c`) — `name: "tv-mcp"`, `version: "1.0.0"`.
+- **npm publish abandoned** — hit 2FA wall, then user pushed back on whether npm was needed at all. Decided no: public clone-from-GitHub already covers install end-to-end. Token revoked.
+- 68/68 unit tests pass. `npm pack --dry-run` clean (74 kB / 60 files).
+
+### Decisions
+- **Skipped npm publish.** Friends install via `git clone`. The `tv setup` command does all the heavy lifting so a global `tv` binary on PATH wasn't worth the npm overhead.
+- **Six lanes is the default** for `tv setup` config output (not one). Extra lanes are idle until used.
+- **CI runs `test:unit`, not `test`.** Live-CDP e2e tests need a real Chrome + TV tab and aren't reproducible in CI.
+
+### Next
+- (Optional) Tag v1.0.0 + GH release.
+- (Maybe) update README CLI section.
+- Tradibos context switch.
+
