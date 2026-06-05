@@ -6,7 +6,11 @@
 
 **v1.0.0 shipped 2026-05-18.** Tag pushed, GitHub release live at https://github.com/ogdeeeezy/tv-mcp/releases/tag/v1.0.0. Onboarding: `git clone → npm install → npm run setup` (or `tv setup`). CI green on `{ubuntu, macos, windows} × node {18, 20, 22}`. **80/80 unit tests.** Issue #1 closed end-to-end (verified live on `NYMEX:CL1!` 4h). README and release notes both lead with `tv setup`.
 
-**No open work.** All S4/S5 carry-overs (release tag, README polish, CL position sanity-check) are done in S6.
+**Open work queued (added 2026-06-05): `pine_new` overwrites the last-loaded script.** Discovered by the tradibos-nautilus instance while building a three-way Pine/Python/Nautilus backtest comparator. Caused data loss (W-Bottom v5 PROP TUNED v5.0 → overwritten by Darvas v7.0). Recovered in-session via pine-facade versioned-get + Monaco action save.
+
+- **Incident write-up**: `INCIDENT-pine-overwrite-2026-06-05.md` — full repro, root cause in `src/core/pine.js:508`, evidence trail
+- **Fix spec**: `SPEC-pine-safe-create.md` — four fixes (true pine_new, reliable save, multi-instance claim, deprecation messaging), test plan, open questions
+- **Blocked downstream**: tradibos-nautilus Pine ingestion for three-way compare harness on H2 (`/root/tradibos-nautilus/harness/three_way_compare.py`). PyParity + Nautilus lanes work; Pine slot stays empty until this fix ships.
 
 ## When to open this project again
 
@@ -14,6 +18,7 @@ Only on real demand:
 - A friend installs from the GH release and hits a bug — file an issue, fix on a branch, cut v1.0.1.
 - Upstream `tradesdontlie/tradingview-mcp` lands a change worth vendoring in — cherry-pick or rebase.
 - A new feature ask (more lanes, a new MCP tool, a Pine-side helper) — start a fresh PROGRESS session.
+- **NOW**: pine_new safe-create work above. tradibos-nautilus needs it unblocked.
 
 No periodic maintenance scheduled. CI catches Node-version regressions automatically.
 
