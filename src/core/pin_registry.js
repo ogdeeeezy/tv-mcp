@@ -20,7 +20,7 @@ const LOCK_PATH = REGISTRY_PATH + '.lock';
 const LOCK_STALE_MS = 5000;
 const LOCK_RETRY_MS = 25;
 const LOCK_MAX_WAIT_MS = 2000;
-const REGISTRY_VERSION = 1;
+const REGISTRY_VERSION = 2;
 
 function isAlive(pid) {
   if (!pid || typeof pid !== 'number') return false;
@@ -34,7 +34,7 @@ function isAlive(pid) {
 }
 
 function emptyRegistry() {
-  return { version: REGISTRY_VERSION, pins: {} };
+  return { version: REGISTRY_VERSION, pins: {}, pine_editor: null };
 }
 
 function readRaw() {
@@ -43,6 +43,8 @@ function readRaw() {
     const txt = readFileSync(REGISTRY_PATH, 'utf8');
     const parsed = JSON.parse(txt);
     if (!parsed || typeof parsed !== 'object' || !parsed.pins) return emptyRegistry();
+    // v1 → v2 migration: ensure pine_editor field exists (null = unclaimed)
+    if (!('pine_editor' in parsed)) parsed.pine_editor = null;
     return parsed;
   } catch {
     // Corrupt registry — treat as empty. A subsequent write will repair it.
@@ -99,6 +101,10 @@ async function readAndPrune() {
         mutated = true;
       }
     }
+    if (reg.pine_editor && !isAlive(reg.pine_editor.pid)) {
+      reg.pine_editor = null;
+      mutated = true;
+    }
     if (mutated) writeAtomic(reg);
     return reg;
   } finally {
@@ -122,6 +128,7 @@ export async function claim(targetId, { force = false, lane = null } = {}) {
     for (const [tid, entry] of Object.entries(reg.pins)) {
       if (!isAlive(entry?.pid)) delete reg.pins[tid];
     }
+    if (reg.pine_editor && !isAlive(reg.pine_editor.pid)) reg.pine_editor = null;
     const existing = reg.pins[targetId];
     if (existing && existing.pid !== process.pid) {
       if (!force) {
@@ -184,6 +191,10 @@ export async function releaseAll() {
         mutated = true;
       }
     }
+    if (reg.pine_editor && reg.pine_editor.pid === process.pid) {
+      reg.pine_editor = null;
+      mutated = true;
+    }
     if (mutated) writeAtomic(reg);
     return { released_count: Object.keys(reg.pins).length };
   } finally {
@@ -205,6 +216,9 @@ export async function list() {
       ...entry,
       mine: entry.pid === process.pid,
     })),
+    pine_editor: reg.pine_editor
+      ? { ...reg.pine_editor, mine: reg.pine_editor.pid === process.pid }
+      : null,
   };
 }
 
@@ -232,6 +246,10 @@ export function releaseAllSync() {
           mutated = true;
         }
       }
+      if (reg.pine_editor && reg.pine_editor.pid === process.pid) {
+        reg.pine_editor = null;
+        mutated = true;
+      }
       if (mutated) writeAtomic(reg);
     } finally {
       try { unlinkSync(LOCK_PATH); } catch {}
@@ -239,6 +257,84 @@ export function releaseAllSync() {
   } catch {
     // Swallow — we're exiting anyway.
   }
+}
+
+// ── Pine editor claim ──────────────────────────────────────────────────────
+//
+// The Pine Editor in TV is a singleton bottom-widget per tab, but the underlying
+// script slots are shared across the whole TradingView account (and therefore
+// across every Chrome tab and every MCP process touching this Chrome). Two
+// instances both calling `pine_set_source` + save will race on the cloud slot
+// and the second save overwrites the first — exactly the failure mode that
+// destroyed W-Bottom v5 PROP TUNED on 2026-06-05.
+//
+// This claim is GLOBAL (one across the registry, not per-tab) because the
+// blast radius of a save is global. The single-slot semantics mirror the spec's
+// Layer A in SPEC-pine-safe-create.md.
+
+/**
+ * Claim the global Pine editor for this process. Throws PIN_CONFLICT if another
+ * live PID holds it (unless `force: true`).
+ */
+export async function claimPineEditor({ force = false, lane = null, scriptIdPart = null } = {}) {
+  await acquireLock();
+  try {
+    const reg = readRaw();
+    if (reg.pine_editor && !isAlive(reg.pine_editor.pid)) reg.pine_editor = null;
+    const existing = reg.pine_editor;
+    if (existing && existing.pid !== process.pid) {
+      if (!force) {
+        const err = new Error(
+          `Pine editor is claimed by pid=${existing.pid} (lane=${existing.lane || 'unknown'}, host=${existing.host}, since ${new Date(existing.claimedAt).toISOString()}). ` +
+          `Call pine_release from that process, or retry with force=true to override.`
+        );
+        err.code = 'PINE_CONFLICT';
+        err.owner = existing;
+        throw err;
+      }
+    }
+    const entry = {
+      pid: process.pid,
+      host: hostname(),
+      lane: lane || process.env.TV_MCP_LANE || null,
+      claimedAt: Date.now(),
+      scriptIdPart: scriptIdPart || null,
+    };
+    const displaced = existing && existing.pid !== process.pid ? existing : null;
+    reg.pine_editor = entry;
+    writeAtomic(reg);
+    return { entry, displaced };
+  } finally {
+    releaseLock();
+  }
+}
+
+/**
+ * Release the Pine editor claim if held by this process. Idempotent.
+ */
+export async function releasePineEditor() {
+  await acquireLock();
+  try {
+    const reg = readRaw();
+    const existing = reg.pine_editor;
+    if (existing && existing.pid === process.pid) {
+      reg.pine_editor = null;
+      writeAtomic(reg);
+      return { released: true };
+    }
+    return { released: false };
+  } finally {
+    releaseLock();
+  }
+}
+
+/**
+ * Read the current Pine editor claim (with stale-PID prune). Returns the live
+ * claim entry or null. Read-only from the caller's perspective.
+ */
+export async function getPineEditorClaim() {
+  const reg = await readAndPrune();
+  return reg.pine_editor;
 }
 
 export { REGISTRY_PATH };

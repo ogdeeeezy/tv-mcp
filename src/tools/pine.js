@@ -72,4 +72,37 @@ export function registerPineTools(server) {
     try { return jsonResult(await core.check({ source })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
+
+  server.tool(
+    'pine_claim',
+    'Claim the Pine editor for this MCP process. Pine write tools (pine_new, pine_set_source, pine_save, pine_smart_compile, pine_compile) require an active claim. The Pine editor is a singleton resource across the whole Chrome instance — without coordination, two Claude sessions can silently overwrite each other (incident 2026-06-05). Returns {conflict, owner} if another live PID already holds it.',
+    {
+      force: z.boolean().optional().describe('Override an existing live claim. Use only when the other session is known stuck.'),
+      scriptIdPart: z.string().optional().describe('Optional: TV scriptIdPart of the script you intend to edit (informational only).'),
+    },
+    async ({ force, scriptIdPart }) => {
+      try { return jsonResult(await core.pineClaim({ force: !!force, scriptIdPart })); }
+      catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    }
+  );
+
+  server.tool(
+    'pine_release',
+    'Release the Pine editor claim held by this MCP process. Idempotent — succeeds silently if not held.',
+    {},
+    async () => {
+      try { return jsonResult(await core.pineRelease()); }
+      catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    }
+  );
+
+  server.tool(
+    'pine_claim_status',
+    'Read-only view of the current Pine editor claim. Returns {claimed, claim, mine}.',
+    {},
+    async () => {
+      try { return jsonResult(await core.pineClaimStatus()); }
+      catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    }
+  );
 }

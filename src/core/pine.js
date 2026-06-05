@@ -4,6 +4,73 @@
  * They throw on error (callers catch and format).
  */
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
+import { getPineEditorClaim, claimPineEditor, releasePineEditor } from './pin_registry.js';
+
+// ── Pine editor claim gate ──
+//
+// Write tools (newScript, setSource, save, smartCompile, compile) all mutate
+// either the Monaco buffer or the cloud script slot. Without a claim, two MCP
+// processes sharing this Chrome will race on every call and silently overwrite
+// each other (incident 2026-06-05). This gate makes the contract explicit:
+// the caller must hold the pine_editor claim or the write is refused.
+//
+// Bypass for back-compat / single-instance dev: set TV_MCP_PINE_WRITE_UNGATED=1
+// at server start. Off by default — the default has to be safe.
+
+async function requirePineClaim() {
+  if (process.env.TV_MCP_PINE_WRITE_UNGATED === '1') return { ungated: true };
+  const claim = await getPineEditorClaim();
+  if (!claim) {
+    const err = new Error(
+      'Pine editor not claimed by this process. Call pine_claim before any pine_new/pine_set_source/pine_save/pine_smart_compile/pine_compile. ' +
+      'This gate exists to prevent two Claude sessions from silently overwriting each other (incident 2026-06-05).'
+    );
+    err.code = 'PINE_NOT_CLAIMED';
+    throw err;
+  }
+  if (claim.pid !== process.pid) {
+    const err = new Error(
+      `Pine editor claimed by pid=${claim.pid} (lane=${claim.lane || 'unknown'}, host=${claim.host}). ` +
+      'This process cannot write. Wait for the owner to call pine_release, or call pine_claim with force=true to take over.'
+    );
+    err.code = 'PINE_CLAIMED_BY_OTHER';
+    err.owner = claim;
+    throw err;
+  }
+  return claim;
+}
+
+export async function pineClaim({ force = false, lane = null, scriptIdPart = null } = {}) {
+  try {
+    const { entry, displaced } = await claimPineEditor({ force, lane, scriptIdPart });
+    return {
+      success: true,
+      claim: entry,
+      displaced,
+      action: displaced ? 'forced_claim' : 'claimed',
+    };
+  } catch (err) {
+    if (err.code === 'PINE_CONFLICT') {
+      return { success: false, conflict: true, owner: err.owner, error: err.message };
+    }
+    throw err;
+  }
+}
+
+export async function pineRelease() {
+  const { released } = await releasePineEditor();
+  return { success: true, released };
+}
+
+export async function pineClaimStatus() {
+  const claim = await getPineEditorClaim();
+  return {
+    success: true,
+    claimed: !!claim,
+    claim,
+    mine: claim ? claim.pid === process.pid : false,
+  };
+}
 
 // ── Monaco finder (injected into TV page) ──
 const FIND_MONACO = `
@@ -264,6 +331,7 @@ export async function getSource() {
 }
 
 export async function setSource({ source }) {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -282,6 +350,7 @@ export async function setSource({ source }) {
 }
 
 export async function compile() {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -345,6 +414,7 @@ export async function getErrors() {
 }
 
 export async function save() {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -427,6 +497,7 @@ export async function getConsole() {
 }
 
 export async function smartCompile() {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -506,6 +577,7 @@ export async function smartCompile() {
 }
 
 export async function newScript({ type }) {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 

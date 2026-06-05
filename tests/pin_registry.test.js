@@ -320,7 +320,7 @@ describe('corruption tolerance', () => {
     assert.equal(after.pin_count, 1);
     // File should now be valid JSON
     const onDisk = JSON.parse(readFileSync(registryPath, 'utf8'));
-    assert.equal(onDisk.version, 1);
+    assert.equal(onDisk.version, 2);
   });
 
   it('treats a missing registry file as empty', async () => {
@@ -349,8 +349,238 @@ describe('write atomicity', () => {
       await claim(`tab-${i}`);
       const txt = readFileSync(registryPath, 'utf8');
       const parsed = JSON.parse(txt);
-      assert.equal(parsed.version, 1);
+      assert.equal(parsed.version, 2);
       assert.ok(parsed.pins[`tab-${i}`]);
     }
+  });
+});
+
+// ── Pine editor claim ───────────────────────────────────────────────────
+//
+// The pine_editor slot is a single global claim — distinct from per-tab
+// pins because the Pine cloud slot is shared across the whole TV account.
+// These tests mirror the tab-pin tests but exercise the singleton path.
+
+function runWorkerPineClaim({ force = false, lane = null, scriptIdPart = null }) {
+  const script = `
+    process.env.TV_MCP_REGISTRY_PATH = ${JSON.stringify(registryPath)};
+    const { claimPineEditor } = await import(${JSON.stringify(REGISTRY_MODULE)});
+    try {
+      const r = await claimPineEditor({ force: ${force}, lane: ${JSON.stringify(lane)}, scriptIdPart: ${JSON.stringify(scriptIdPart)} });
+      process.stdout.write(JSON.stringify({ ok: true, pid: process.pid, result: r }));
+    } catch (err) {
+      process.stdout.write(JSON.stringify({ ok: false, pid: process.pid, error: err.message, code: err.code, owner: err.owner }));
+    }
+  `;
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  return { status: res.status, stdout: res.stdout, parsed: JSON.parse(res.stdout) };
+}
+
+describe('claimPineEditor() — basic', () => {
+  it('claims when unclaimed', async () => {
+    const { claimPineEditor, getPineEditorClaim } = await freshRegistry();
+    const r = await claimPineEditor({ lane: 'tv-mcp-a' });
+    assert.equal(r.entry.pid, process.pid);
+    assert.equal(r.entry.lane, 'tv-mcp-a');
+    assert.equal(r.displaced, null);
+    const claim = await getPineEditorClaim();
+    assert.equal(claim.pid, process.pid);
+  });
+
+  it('is idempotent for the same PID', async () => {
+    const { claimPineEditor } = await freshRegistry();
+    const r1 = await claimPineEditor({ lane: 'tv-mcp-a' });
+    const r2 = await claimPineEditor({ lane: 'tv-mcp-a' });
+    assert.equal(r1.entry.pid, process.pid);
+    assert.equal(r2.entry.pid, process.pid);
+    assert.equal(r2.displaced, null);
+  });
+
+  it('persists optional scriptIdPart', async () => {
+    const { claimPineEditor, getPineEditorClaim } = await freshRegistry();
+    await claimPineEditor({ scriptIdPart: 'USER;abc123' });
+    const claim = await getPineEditorClaim();
+    assert.equal(claim.scriptIdPart, 'USER;abc123');
+  });
+});
+
+describe('claimPineEditor() — cross-process conflict', () => {
+  it('rejects a second live PID without force', async () => {
+    const { claimPineEditor } = await freshRegistry();
+    // Worker claims first (different PID), holds claim by exiting cleanly with the entry persisted.
+    const worker = runWorkerPineClaim({ lane: 'tv-mcp-b' });
+    assert.equal(worker.parsed.ok, true);
+    const workerPid = worker.parsed.pid;
+    // Now from this process, the claim should look unclaimed because the worker
+    // PID is dead (process exited) — readAndPrune will clear it. Verify the
+    // prune happens by claiming successfully.
+    const r = await claimPineEditor();
+    assert.equal(r.entry.pid, process.pid);
+    assert.notEqual(r.entry.pid, workerPid);
+  });
+
+  it('refuses claim if another live PID holds it', async () => {
+    // We need a worker that STAYS alive while we try to claim. spawn (async) and
+    // give it a sleep loop.
+    const script = `
+      process.env.TV_MCP_REGISTRY_PATH = ${JSON.stringify(registryPath)};
+      const { claimPineEditor } = await import(${JSON.stringify(REGISTRY_MODULE)});
+      const r = await claimPineEditor({ lane: 'tv-mcp-b' });
+      process.stdout.write('CLAIMED:' + process.pid + '\\n');
+      await new Promise(r => setTimeout(r, 3000));
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let childPid = null;
+    await new Promise((resolve, reject) => {
+      const onData = (buf) => {
+        const s = buf.toString();
+        const m = s.match(/CLAIMED:(\d+)/);
+        if (m) { childPid = parseInt(m[1], 10); resolve(); }
+      };
+      child.stdout.on('data', onData);
+      child.once('error', reject);
+      setTimeout(() => reject(new Error('worker did not claim in time')), 3000);
+    });
+    try {
+      const { claimPineEditor } = await freshRegistry();
+      await assert.rejects(
+        () => claimPineEditor({ lane: 'tv-mcp-a' }),
+        (err) => err.code === 'PINE_CONFLICT' && err.owner?.pid === childPid
+      );
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise(r => child.once('exit', r));
+    }
+  });
+
+  it('force=true overrides a live owner and reports displaced', async () => {
+    const script = `
+      process.env.TV_MCP_REGISTRY_PATH = ${JSON.stringify(registryPath)};
+      const { claimPineEditor } = await import(${JSON.stringify(REGISTRY_MODULE)});
+      await claimPineEditor({ lane: 'tv-mcp-b' });
+      process.stdout.write('CLAIMED:' + process.pid + '\\n');
+      await new Promise(r => setTimeout(r, 3000));
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let childPid = null;
+    await new Promise((resolve, reject) => {
+      child.stdout.on('data', (buf) => {
+        const m = buf.toString().match(/CLAIMED:(\d+)/);
+        if (m) { childPid = parseInt(m[1], 10); resolve(); }
+      });
+      setTimeout(() => reject(new Error('worker did not claim in time')), 3000);
+    });
+    try {
+      const { claimPineEditor } = await freshRegistry();
+      const r = await claimPineEditor({ force: true, lane: 'tv-mcp-a' });
+      assert.equal(r.entry.pid, process.pid);
+      assert.ok(r.displaced);
+      assert.equal(r.displaced.pid, childPid);
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise(r => child.once('exit', r));
+    }
+  });
+});
+
+describe('releasePineEditor()', () => {
+  it('releases an owned claim', async () => {
+    const { claimPineEditor, releasePineEditor, getPineEditorClaim } = await freshRegistry();
+    await claimPineEditor();
+    const r = await releasePineEditor();
+    assert.equal(r.released, true);
+    assert.equal(await getPineEditorClaim(), null);
+  });
+
+  it('is a no-op when nothing is held', async () => {
+    const { releasePineEditor } = await freshRegistry();
+    const r = await releasePineEditor();
+    assert.equal(r.released, false);
+  });
+
+  it('does not release another PID\'s claim', async () => {
+    const script = `
+      process.env.TV_MCP_REGISTRY_PATH = ${JSON.stringify(registryPath)};
+      const { claimPineEditor } = await import(${JSON.stringify(REGISTRY_MODULE)});
+      await claimPineEditor();
+      process.stdout.write('CLAIMED:' + process.pid + '\\n');
+      await new Promise(r => setTimeout(r, 3000));
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    await new Promise((resolve, reject) => {
+      child.stdout.on('data', (buf) => { if (/CLAIMED:/.test(buf.toString())) resolve(); });
+      setTimeout(() => reject(new Error('worker did not claim')), 3000);
+    });
+    try {
+      const { releasePineEditor, getPineEditorClaim } = await freshRegistry();
+      const r = await releasePineEditor();
+      assert.equal(r.released, false);
+      const claim = await getPineEditorClaim();
+      assert.ok(claim, 'other PID\'s claim should remain');
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise(r => child.once('exit', r));
+    }
+  });
+});
+
+describe('Pine editor + tab pins coexist', () => {
+  it('claiming a tab does not affect the pine_editor slot', async () => {
+    const { claim, claimPineEditor, getPineEditorClaim, list } = await freshRegistry();
+    await claim('tab-X');
+    assert.equal(await getPineEditorClaim(), null);
+    await claimPineEditor();
+    const after = await list();
+    assert.equal(after.pin_count, 1);
+    assert.ok(after.pine_editor);
+    assert.equal(after.pine_editor.mine, true);
+  });
+
+  it('releaseAll clears both tab pins AND pine_editor slot for this PID', async () => {
+    const { claim, claimPineEditor, releaseAll, getPineEditorClaim, list } = await freshRegistry();
+    await claim('tab-A');
+    await claim('tab-B');
+    await claimPineEditor();
+    await releaseAll();
+    const after = await list();
+    assert.equal(after.pin_count, 0);
+    assert.equal(after.pine_editor, null);
+    assert.equal(await getPineEditorClaim(), null);
+  });
+
+  it('readAndPrune clears a dead-PID pine_editor claim', async () => {
+    const worker = runWorkerPineClaim({});
+    assert.equal(worker.parsed.ok, true);
+    // Worker exited → its PID is dead → next read should prune the slot.
+    const { getPineEditorClaim } = await freshRegistry();
+    assert.equal(await getPineEditorClaim(), null);
+  });
+});
+
+describe('v1 registry backward compat', () => {
+  it('reads a v1 registry file and treats pine_editor as null', async () => {
+    writeFileSync(registryPath, JSON.stringify({ version: 1, pins: {} }));
+    const { getPineEditorClaim } = await freshRegistry();
+    const claim = await getPineEditorClaim();
+    assert.equal(claim, null);
+  });
+
+  it('preserves existing v1 tab pins through pine_editor extension', async () => {
+    // Write a v1 file with a real-looking pin entry for this PID.
+    writeFileSync(registryPath, JSON.stringify({
+      version: 1,
+      pins: { 'tab-legacy': { pid: process.pid, host: 'h', lane: null, claimedAt: Date.now() } },
+    }));
+    const { list, claimPineEditor } = await freshRegistry();
+    const before = await list();
+    assert.equal(before.pin_count, 1);
+    // Now claim pine — should not lose the tab pin.
+    await claimPineEditor();
+    const after = await list();
+    assert.equal(after.pin_count, 1);
+    assert.ok(after.pine_editor);
   });
 });
