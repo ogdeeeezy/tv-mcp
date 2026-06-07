@@ -413,37 +413,249 @@ export async function getErrors() {
   };
 }
 
-export async function save() {
+// ── Pine editor binding inspection ──
+//
+// TV's web Pine Editor tracks two separate states:
+//   1. The Monaco editor's text buffer (mutated by setValue, openScript, etc.)
+//   2. The "currently bound cloud script slot" — i.e., what `save.script` writes to
+//
+// The 2026-06-05 incident proved that (1) and (2) drift apart: setValue mutates
+// the buffer but leaves the bound slot pointing at whatever was last loaded.
+// Save then overwrites the previously-bound slot — silent data loss.
+//
+// Detection: TV's title button (data-qa-id="pine-script-title-button") displays
+// the bound slot's name, or "Untitled script" when the editor is unbound (e.g.,
+// after running the new_indicator/new_strategy Monaco action).
+async function getEditorBindingState() {
+  const state = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[data-qa-id="pine-script-title-button"]');
+      var title = btn ? btn.textContent.trim() : null;
+      var m = ${FIND_MONACO};
+      var modelUri = null;
+      var isSaveEnabled = null;
+      if (m) {
+        var editor = m.editor.getEditors()[0];
+        if (editor) {
+          modelUri = editor.getModel() ? editor.getModel().uri.toString() : null;
+          if (editor._contextKeyService) {
+            isSaveEnabled = editor._contextKeyService.getContextKeyValue('isSaveEnabled');
+          }
+        }
+      }
+      return { title: title, modelUri: modelUri, isSaveEnabled: isSaveEnabled };
+    })()
+  `);
+  return {
+    title: state?.title || null,
+    modelUri: state?.modelUri || null,
+    isSaveEnabled: !!state?.isSaveEnabled,
+    bound: state?.title && state.title !== 'Untitled script',
+  };
+}
+
+// ── Direct POST to pine-facade/save/new ──
+//
+// Endpoint discovered via probe 2026-06-07: POST creates a new cloud script slot
+// with the given name and source. The `allow_overwrite=false` URL param refuses
+// to overwrite an existing script with the same name (returns 4xx instead).
+async function saveNew({ name, source }) {
+  const escapedSource = JSON.stringify(source);
+  const escapedName = JSON.stringify(name);
+  const result = await evaluateAsync(`
+    (function() {
+      var fd = new FormData();
+      fd.append('source', ${escapedSource});
+      return fetch(
+        'https://pine-facade.tradingview.com/pine-facade/save/new?name=' +
+          encodeURIComponent(${escapedName}) + '&allow_overwrite=false',
+        { method: 'POST', body: fd, credentials: 'include' }
+      ).then(function(r) {
+        return r.text().then(function(t) {
+          var parsed = null;
+          try { parsed = JSON.parse(t); } catch (e) {}
+          return { status: r.status, ok: r.ok, body: parsed, raw: parsed ? null : t.slice(0, 500) };
+        });
+      }).catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+
+  if (result?.error) throw new Error('pine-facade fetch failed: ' + result.error);
+  if (!result?.ok) {
+    throw new Error(
+      'pine-facade /save/new returned HTTP ' + result?.status + ': ' +
+      JSON.stringify(result?.body || result?.raw || '').slice(0, 300)
+    );
+  }
+
+  const body = result.body || {};
+  // Observed response shape (probe 2026-06-07):
+  //   { success: true, result: { metaInfo: { scriptIdPart, description, pine: { version }, ... } } }
+  // The metaInfo block carries the canonical IDs. Fall back to flatter shapes defensively.
+  const metaInfo = (body.result && body.result.metaInfo) || {};
+  const inner = body.result || body;
+  const scriptIdPart =
+    metaInfo.scriptIdPart ||
+    inner.scriptIdPart ||
+    body.scriptIdPart ||
+    null;
+  const version =
+    (metaInfo.pine && metaInfo.pine.version) ||
+    inner.version ||
+    body.version ||
+    '1.0';
+  if (!scriptIdPart) {
+    throw new Error(
+      'pine-facade /save/new succeeded but response did not include scriptIdPart: ' +
+      JSON.stringify(body).slice(0, 300)
+    );
+  }
+  return {
+    scriptIdPart,
+    name: metaInfo.description || inner.name || body.name || name,
+    version,
+  };
+}
+
+export async function save({ name = null, verify_timeout_ms = 5000 } = {}) {
   await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
-  const c = await getClient();
-  await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 's', code: 'KeyS', windowsVirtualKeyCode: 83 });
-  await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 's', code: 'KeyS' });
-  await new Promise(r => setTimeout(r, 800));
+  const binding = await getEditorBindingState();
 
-  // Handle "Save Script" name dialog that appears for new/unsaved scripts
-  const dialogHandled = await evaluate(`
+  // Get current editor source for verification / save-new payload
+  const sourceProbe = await evaluate(`
     (function() {
-      var saveBtn = null;
-      var btns = document.querySelectorAll('button');
-      for (var i = 0; i < btns.length; i++) {
-        var text = btns[i].textContent.trim();
-        if (text === 'Save' && btns[i].offsetParent !== null) {
-          // Check if it's in a dialog (not the Pine Editor save button)
-          var parent = btns[i].closest('[class*="dialog"], [class*="modal"], [class*="popup"], [role="dialog"]');
-          if (parent) { saveBtn = btns[i]; break; }
+      var m = ${FIND_MONACO};
+      if (!m) return null;
+      return m.editor.getEditors()[0].getValue();
+    })()
+  `);
+  if (sourceProbe === null || sourceProbe === undefined) {
+    throw new Error('Could not read current editor source.');
+  }
+  const currentSource = sourceProbe;
+
+  // ── Unbound editor: cannot use save.script (would create new slot anyway, but the
+  //    title-prompt flow is brittle). Require an explicit name and POST directly.
+  if (!binding.bound) {
+    if (!name) {
+      const err = new Error(
+        'Editor is an unbound draft (title="Untitled script"). To persist, pass `name` to ' +
+        'create a new cloud slot, or call pine_open first to bind to an existing script.'
+      );
+      err.code = 'PINE_UNBOUND_NEEDS_NAME';
+      throw err;
+    }
+    const created = await saveNew({ name, source: currentSource });
+    return {
+      success: true,
+      action: 'saved_as_new',
+      scriptIdPart: created.scriptIdPart,
+      name: created.name,
+      version: created.version,
+      verified: true,
+      verify_source: 'pine-facade/save/new response',
+    };
+  }
+
+  // ── Bound editor: invoke Monaco save.script command + verify via pine-facade poll.
+  //    The command updates the currently-bound cloud slot (or no-ops if !isSaveEnabled).
+  if (!binding.isSaveEnabled) {
+    return {
+      success: true,
+      action: 'noop',
+      reason: 'isSaveEnabled=false (editor is bound but not dirty — nothing to save)',
+      bound_to_title: binding.title,
+    };
+  }
+
+  // Find the scriptIdPart for the currently-bound slot by matching the title against pine-facade list
+  const boundLookup = await evaluateAsync(`
+    fetch('https://pine-facade.tradingview.com/pine-facade/list?filter=saved', { credentials: 'include' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!Array.isArray(data)) return { error: 'unexpected list response' };
+        var target = ${JSON.stringify(binding.title)};
+        var match = null;
+        for (var i = 0; i < data.length; i++) {
+          var name = data[i].scriptName || '';
+          var title = data[i].scriptTitle || '';
+          if (name === target || title === target) { match = data[i]; break; }
         }
+        return match ? { scriptIdPart: match.scriptIdPart, version: match.version } : { error: 'no script matching title ' + JSON.stringify(target) };
+      })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+  if (boundLookup?.error) {
+    throw new Error('Could not identify bound scriptIdPart: ' + boundLookup.error);
+  }
+  const boundScriptIdPart = boundLookup.scriptIdPart;
+  const versionBefore = boundLookup.version;
+
+  // Invoke the save.script command via the editor's command service
+  const invoked = await evaluate(`
+    (function() {
+      var m = ${FIND_MONACO};
+      if (!m) return { ok: false, error: 'no editor' };
+      var editor = m.editor.getEditors()[0];
+      if (!editor || !editor._commandService) return { ok: false, error: 'no command service' };
+      try {
+        editor._commandService.executeCommand('vs.editor.ICodeEditor:1:save.script');
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
       }
-      if (saveBtn) { saveBtn.click(); return true; }
-      return false;
+    })()
+  `);
+  if (!invoked?.ok) throw new Error('save.script invocation failed: ' + (invoked?.error || 'unknown'));
+
+  // Verify: poll pine-facade /get/{id}/last until source matches OR timeout
+  const expectedSource = currentSource;
+  const escapedExpected = JSON.stringify(expectedSource);
+  const escapedId = JSON.stringify(boundScriptIdPart);
+  const verify = await evaluateAsync(`
+    (function() {
+      var deadline = Date.now() + ${Number(verify_timeout_ms) | 0};
+      // TV normalizes line endings to \\r\\n on store; normalize both sides for comparison.
+      function norm(s) { return (s || '').replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n'); }
+      var expected = norm(${escapedExpected});
+      function poll() {
+        if (Date.now() > deadline) return { ok: false, reason: 'timeout' };
+        return fetch(
+          'https://pine-facade.tradingview.com/pine-facade/get/' + encodeURIComponent(${escapedId}) + '/last',
+          { credentials: 'include' }
+        ).then(function(r) { return r.json(); }).then(function(j) {
+          var src = norm((j && (j.source || (j.result && j.result.source))) || '');
+          var version = (j && (j.version || (j.result && j.result.version))) || null;
+          if (src === expected) return { ok: true, version: version };
+          return new Promise(function(resolve) { setTimeout(function() { resolve(poll()); }, 200); });
+        }).catch(function(e) { return { ok: false, reason: e.message }; });
+      }
+      return poll();
     })()
   `);
 
-  if (dialogHandled) await new Promise(r => setTimeout(r, 500));
+  if (!verify?.ok) {
+    return {
+      success: false,
+      action: 'save_invoked_but_not_verified',
+      scriptIdPart: boundScriptIdPart,
+      reason: verify?.reason || 'unknown',
+      version_before: versionBefore,
+    };
+  }
 
-  return { success: true, action: dialogHandled ? 'saved_with_dialog' : 'Ctrl+S_dispatched' };
+  return {
+    success: true,
+    action: 'saved_and_verified',
+    scriptIdPart: boundScriptIdPart,
+    version_before: versionBefore,
+    version_after: verify.version,
+    verified: true,
+    verify_source: 'pine-facade/get/' + boundScriptIdPart + '/last',
+  };
 }
 
 export async function getConsole() {
@@ -576,34 +788,93 @@ export async function smartCompile() {
   };
 }
 
-export async function newScript({ type }) {
+export async function newScript({ type, name = null, source = null } = {}) {
   await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
-  const typeMap = { indicator: 'indicator', strategy: 'strategy', library: 'library' };
   const templates = {
-    indicator: '//@version=6\nindicator("My script")\nplot(close)',
+    indicator: '//@version=6\nindicator("My script")\nplot(close)\n',
     strategy: '//@version=6\nstrategy("My strategy", overlay=true)\n',
     library: '//@version=6\n// @description TODO: add library description here\nlibrary("MyLibrary")\n',
   };
+  const resolvedType = templates[type] ? type : 'indicator';
+  const template = source || templates[resolvedType];
 
-  const template = templates[type] || templates.indicator;
+  // CRITICAL SAFETY STEP: invoke TV's Monaco new_indicator/new_strategy action.
+  // This swaps the editor to a fresh unbound Monaco model, decoupling it from
+  // whichever cloud script slot was previously bound. Without this step, a
+  // subsequent setValue + save would overwrite that slot — the 2026-06-05 incident.
+  //
+  // TV does not register `new_library` — for library type, we use new_indicator
+  // to unbind (template content is then replaced via setValue below).
+  const actionId = resolvedType === 'strategy'
+    ? 'vs.editor.ICodeEditor:1:new_strategy'
+    : 'vs.editor.ICodeEditor:1:new_indicator';
 
-  // Simply set the source to a new template — this is the most reliable approach
-  const escaped = JSON.stringify(template);
-  const set = await evaluate(`
+  const swapped = await evaluate(`
     (function() {
       var m = ${FIND_MONACO};
-      if (!m) return false;
-      m.editor.setValue(${escaped});
-      return true;
+      if (!m) return { ok: false, error: 'no editor' };
+      var editor = m.editor.getEditors()[0];
+      var actions = editor.getSupportedActions();
+      var action = actions.find(function(a) { return a.id === ${JSON.stringify(actionId)}; });
+      if (!action) return { ok: false, error: 'action not registered: ' + ${JSON.stringify(actionId)} };
+      try {
+        action.run();
+        return { ok: true, oldUri: editor.getModel().uri.toString() };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
     })()
   `);
+  if (!swapped?.ok) throw new Error('Monaco new action failed: ' + (swapped?.error || 'unknown'));
 
-  if (!set) throw new Error('Monaco editor not found. Ensure Pine Editor is open.');
+  // Wait briefly for the model swap to settle (TV creates a new Monaco model)
+  await new Promise(r => setTimeout(r, 150));
 
-  return { success: true, type, action: 'new_script_created', template: typeMap[type] };
+  // Install our source into the now-unbound editor
+  const escapedSource = JSON.stringify(template);
+  const installed = await evaluate(`
+    (function() {
+      var m = ${FIND_MONACO};
+      if (!m) return { ok: false, error: 'no editor after swap' };
+      var editor = m.editor.getEditors()[0];
+      editor.setValue(${escapedSource});
+      return {
+        ok: true,
+        modelUri: editor.getModel().uri.toString(),
+        isSaveEnabled: editor._contextKeyService ? editor._contextKeyService.getContextKeyValue('isSaveEnabled') : null,
+      };
+    })()
+  `);
+  if (!installed?.ok) throw new Error('Failed to install source: ' + (installed?.error || 'unknown'));
+
+  // If `name` is provided, immediately persist as a new cloud slot via pine-facade.
+  // Otherwise, the editor sits as an unbound draft until pine_save({name}) is called.
+  let persisted = false;
+  let scriptIdPart = null;
+  let version = null;
+  if (name) {
+    const created = await saveNew({ name, source: template });
+    persisted = true;
+    scriptIdPart = created.scriptIdPart;
+    version = created.version;
+  }
+
+  return {
+    success: true,
+    type: resolvedType,
+    action: persisted ? 'new_script_created_and_persisted' : 'unbound_draft_created',
+    scriptIdPart,
+    name: name || null,
+    version,
+    persisted,
+    model_uri: installed.modelUri,
+    safety_note: persisted
+      ? 'Cloud slot created via pine-facade/save/new. Editor remains unbound — future pine_save calls will need {name} unless you call pine_open first to bind.'
+      : 'Editor is an unbound draft (decoupled from any pre-existing slot). To persist, call pine_save({ name: "..." }). The editor CANNOT accidentally overwrite an existing script while unbound.',
+  };
 }
 
 export async function openScript({ name }) {

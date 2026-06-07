@@ -25,10 +25,18 @@ export function registerPineTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('pine_save', 'Save the current Pine Script (Ctrl+S)', {}, async () => {
-    try { return jsonResult(await core.save()); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
-  });
+  server.tool(
+    'pine_save',
+    'Persist the current editor source to a TradingView cloud script slot, with end-to-end verification via pine-facade. Two paths based on editor state: (a) editor is bound to an existing script (title button shows the script name) — invokes Monaco save.script + polls pine-facade /get/{id}/last until the persisted source matches; (b) editor is unbound ("Untitled script") — requires `name` and POSTs directly to /pine-facade/save/new (allow_overwrite=false) to create a new slot. Replaces the pre-2026-06-07 Ctrl+S dispatch that silently no-op\'d on wrong focus (incident 2026-06-05).',
+    {
+      name: z.string().optional().describe('Required when the editor is an unbound draft (post-pine_new). Creates a NEW cloud slot with this name. Refuses with allow_overwrite=false if a script with this name already exists. Ignored when editor is bound to an existing script.'),
+      verify_timeout_ms: z.number().optional().describe('Max time to poll pine-facade for the persisted source to match the editor source. Default 5000.'),
+    },
+    async ({ name, verify_timeout_ms }) => {
+      try { return jsonResult(await core.save({ name: name || null, verify_timeout_ms: verify_timeout_ms || 5000 })); }
+      catch (err) { return jsonResult({ success: false, error: err.message, code: err.code || null }, true); }
+    }
+  );
 
   server.tool('pine_get_console', 'Read Pine Script console/log output (compile messages, log.info(), errors)', {}, async () => {
     try { return jsonResult(await core.getConsole()); }
@@ -40,12 +48,19 @@ export function registerPineTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('pine_new', 'Create a new blank Pine Script', {
-    type: z.enum(['indicator', 'strategy', 'library']).describe('Type of script to create'),
-  }, async ({ type }) => {
-    try { return jsonResult(await core.newScript({ type })); }
-    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
-  });
+  server.tool(
+    'pine_new',
+    'Create a new Pine Script. Invokes TV\'s Monaco new_indicator/new_strategy action to swap the editor to a fresh UNBOUND model — this is the critical safety primitive that decouples the editor from any previously-loaded cloud script (prevents the 2026-06-05 silent-overwrite bug). If `name` is provided, also POSTs to /pine-facade/save/new (allow_overwrite=false) to create a real cloud slot immediately; returns the new scriptIdPart. If `name` is omitted, leaves the editor as an unbound draft that cannot accidentally overwrite an existing script; caller must use pine_save({name}) to persist.',
+    {
+      type: z.enum(['indicator', 'strategy', 'library']).describe('Type of script to create. Library uses the new_indicator action to unbind then replaces source (TV does not register a new_library Monaco action).'),
+      name: z.string().optional().describe('Optional: cloud script slot name. When provided, the script is immediately persisted to TradingView via pine-facade. Refuses with allow_overwrite=false if a script with this name already exists.'),
+      source: z.string().optional().describe('Optional: starting source code. Defaults to a minimal v6 template for the chosen type.'),
+    },
+    async ({ type, name, source }) => {
+      try { return jsonResult(await core.newScript({ type, name: name || null, source: source || null })); }
+      catch (err) { return jsonResult({ success: false, error: err.message, code: err.code || null }, true); }
+    }
+  );
 
   server.tool('pine_open', 'Open a saved Pine Script by name', {
     name: z.string().describe('Name of the saved script to open (case-insensitive match)'),

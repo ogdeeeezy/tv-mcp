@@ -4,7 +4,7 @@
 
 ## Current state
 
-**v1.0.1 shipped. 2026-06-05: Fix 3 of 3 from the pine-overwrite incident shipped (`2f4fbb6`).** Fixes 1 and 2 still queued.
+**v1.0.1 shipped. 2026-06-07: Fix 1 and Fix 2 implemented + live-tested end-to-end.** Awaiting MCP restart to verify through the actual tools. Fix 3 shipped 2026-06-05.
 
 ### What Fix 3 covers
 Multi-instance Pine editor claim registry. `~/.tv-mcp-registry.json` now v2 with a global `pine_editor` singleton slot. Tools: `pine_claim`, `pine_release`, `pine_claim_status`. Every Pine write tool (`pine_new`, `pine_set_source`, `pine_save`, `pine_smart_compile`, `pine_compile`) refuses to run without a claim — returns `PINE_NOT_CLAIMED` or `PINE_CLAIMED_BY_OTHER` with owner info. Escape hatch: `TV_MCP_PINE_WRITE_UNGATED=1`. Exit handler clears the slot. 12 new tests, 34/34 pin_registry pass, 47/47 other unit tests pass. **MCP processes do not hot-reload — Fix 3 only takes effect after a Claude Code restart.**
@@ -12,21 +12,36 @@ Multi-instance Pine editor claim registry. `~/.tv-mcp-registry.json` now v2 with
 ### What Fix 3 does NOT cover (still queued)
 - **Fix 1 — `pine_new` actually creates a server-side slot.** Currently still rebinds editor to whatever script was last loaded (the data-loss bug). Spec: `SPEC-pine-safe-create.md`. Gated on discovering the pine-facade create endpoint via Chrome network capture (probe attempted, paused mid-session).
 - **Fix 2 — verified `pine_save`.** Currently dispatches Ctrl+S and reports `success: true` even when focus was wrong and nothing persisted. Use Monaco action `vs.editor.ICodeEditor:1:save.script` (proven in the 2026-06-05 recovery) + pine-facade `/get/{id}/last` poll.
+- **Fix 4 — pre-flight snapshot hook (defense in depth, deferred until 1+2 are stable).** Auto-fires inside `pine_claim`: snapshots `pine_list_scripts` + per-script `/get/<id>/last` source bodies to `~/.tv-mcp-snapshots/preflight-<lane>-<ts>.json`, records editor's current binding. On `pine_release` or process exit, diffs versions and loudly flags any version bump on a pre-existing slot (i.e., a slot the lane shouldn't have touched). Rotation: keep last 20. Decision 2026-06-07: do NOT build until 1+2 have shipped and run a few real Pine sessions without incident — pre-flight is the safety net for unknown future bugs, not a substitute for fixing the known ones. Layer C (per-instance Chrome profiles) is DEAD — TV ToS prohibits concurrent sessions per account.
 
 ### Blocked downstream
 `tradibos-nautilus` Pine ingestion for the three-way compare harness on H2 (`/root/tradibos-nautilus/harness/three_way_compare.py`). PyParity + Nautilus lanes work; Pine slot stays empty until Fix 1+2 ship.
 
 ## Immediate next action
 
-1. **Restart Claude Code** so the MCP processes load Fix 3 code (`pine_claim`/`pine_release`/`pine_claim_status` tools appear, registry write migrates to v2).
-2. **Re-pin and re-instrument** the network probe — the live state from Session 8 is gone after restart:
-   - `tab_pin url=YKaDEilf` on lane `tv-mcp-e` (or pick a fresh chart)
-   - Re-install fetch+XHR interceptor in the page (snippet preserved in PROGRESS S8 + recap HTML)
-   - `pine_claim` to take the new claim gate
-3. **Trigger TV's "New script" UI flow programmatically** — open Pine Editor, find the file/menu dropdown (was not visible to my prior `data-name="open-script"` / aria-label search; may need a more targeted selector or a manual user click while the interceptor is hot). Capture the POST URL + method + body shape from `window.__pineProbe.calls`.
-4. **Implement Fix 1** in `src/core/pine.js:newScript` — POST to discovered endpoint, then call `openScript()` to rebind, return real `scriptIdPart`.
-5. **Implement Fix 2** in `src/core/pine.js:save` — switch from Ctrl+S dispatch to Monaco action + pine-facade verify-poll.
-6. **Restart Claude Code again, live integration test:** two `pine_new` calls → +2 `pine_list_scripts` entries with `tv-mcp-probe-<unix-ts>` names; `pine_set_source` + `pine_save` + verify roundtrip via pine-facade `/get/.../last`. Probe scripts pre-approved as throwaway — delete after.
+1. **Restart Claude Code** so MCP lanes pick up the new Fix 1+2 code in `src/core/pine.js`. New tool signatures: `pine_new({type, name?, source?})` and `pine_save({name?, verify_timeout_ms?})`.
+2. **Live integration test through MCP:**
+   - Pin lane (any free), claim Pine.
+   - `pine_new(type='indicator')` → expect `action: 'unbound_draft_created'`, title button shows "Untitled script".
+   - `pine_set_source({source: '//@version=6\nindicator("tv-mcp-restart-test-<ts>")\nplot(close)'})`.
+   - `pine_save({name: 'tv-mcp-restart-test-<ts>'})` → expect `success: true, action: 'saved_as_new', scriptIdPart: <real id>, verified: true`.
+   - `pine_list_scripts` → confirm new entry exists.
+   - `pine_get_source` → confirm source matches what we set.
+3. **Cleanup probe scripts** from Session 9 — four `tvmcp_probe_*` / `tvmcp_fix1_e2e_*` entries plus the restart-test one. Either via TV UI or by probing the delete endpoint (likely `/pine-facade/delete/<id>`, not captured Session 9).
+
+## Discovered endpoints (Session 9 probe)
+
+- `POST https://pine-facade.tradingview.com/pine-facade/save/new?name=<urlencoded>&allow_overwrite=true|false` with FormData body `source=<pine source>` → creates new cloud script slot. Response: `{success: true, result: {metaInfo: {scriptIdPart, description, pine: {version}, ...}}}`.
+- `POST https://pine-facade.tradingview.com/pine-facade/parse_title` with FormData `source=` → extracts title from source code.
+- `GET https://pine-facade.tradingview.com/pine-facade/get/<urlencoded-id>/<version|"last">` → fetches versioned source.
+- TV normalizes line endings to `\r\n` on store — verify-poll comparison must normalize before equality.
+
+## Monaco editor primitives (Session 9 probe)
+
+- Actions: `vs.editor.ICodeEditor:1:new_indicator`, `:new_strategy`, `:open.script`, `:detach.window`, `:detach.tab`, `:add.to.chart`, `:discard_all_changes`, `:open.history` — all in `editor.getSupportedActions()`. Call `.run()`.
+- Commands (NOT in getSupportedActions but reachable via `editor._commandService.executeCommand`): `:save.script`, gated on context key `isSaveEnabled && editorId == 'vs.editor.ICodeEditor:1'`.
+- Editor binding: title button `[data-qa-id="pine-script-title-button"]` shows current bound slot name, or "Untitled script" when unbound.
+- `new_indicator`/`new_strategy` is purely client-side (zero network) — it swaps Monaco to a new unbound model. Safe to call without any cloud side effects.
 
 ## When to open this project again
 
