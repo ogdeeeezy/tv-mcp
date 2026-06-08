@@ -1,80 +1,52 @@
 # HANDOFF-tv-mcp
 
-> Fresh fork of `tradesdontlie/tradingview-mcp` at `ogdeeeezy/tv-mcp` (split 2026-05-11 from `~/tradibos/`).
+> Fork at `ogdeeeezy/tv-mcp` (split 2026-05-11 from `~/tradibos/`).
 
 ## Current state
 
-**v1.0.1 shipped. 2026-06-07: Fix 1 and Fix 2 implemented + live-tested end-to-end.** Awaiting MCP restart to verify through the actual tools. Fix 3 shipped 2026-06-05.
+**Fix 1+2 (commit `a3cfcd6`) regression caught + 5-site patch applied on disk, awaiting Claude Code restart to verify.** Fix 3 shipped 2026-06-05.
 
-### What Fix 3 covers
-Multi-instance Pine editor claim registry. `~/.tv-mcp-registry.json` now v2 with a global `pine_editor` singleton slot. Tools: `pine_claim`, `pine_release`, `pine_claim_status`. Every Pine write tool (`pine_new`, `pine_set_source`, `pine_save`, `pine_smart_compile`, `pine_compile`) refuses to run without a claim — returns `PINE_NOT_CLAIMED` or `PINE_CLAIMED_BY_OTHER` with owner info. Escape hatch: `TV_MCP_PINE_WRITE_UNGATED=1`. Exit handler clears the slot. 12 new tests, 34/34 pin_registry pass, 47/47 other unit tests pass. **MCP processes do not hot-reload — Fix 3 only takes effect after a Claude Code restart.**
+Session 10 live integration test through the actual MCP tools failed at step 1: `pine_new` throws `m.editor.getEditors is not a function`. Root cause: `FIND_MONACO` returns `{editor: <Monaco instance>, env: <namespace>}` but the 5 new consumers in `a3cfcd6` call `m.editor.getEditors()[0]` as if `m` were the monaco namespace. Editor instances have no `.getEditors()`. Pre-Fix1+2 consumers (`9274ff3`, still in the file) correctly use `m.editor.setValue(...)` etc.
 
-### What Fix 3 does NOT cover (still queued)
-- **Fix 1 — `pine_new` actually creates a server-side slot.** Currently still rebinds editor to whatever script was last loaded (the data-loss bug). Spec: `SPEC-pine-safe-create.md`. Gated on discovering the pine-facade create endpoint via Chrome network capture (probe attempted, paused mid-session).
-- **Fix 2 — verified `pine_save`.** Currently dispatches Ctrl+S and reports `success: true` even when focus was wrong and nothing persisted. Use Monaco action `vs.editor.ICodeEditor:1:save.script` (proven in the 2026-06-05 recovery) + pine-facade `/get/{id}/last` poll.
-- **Fix 4 — pre-flight snapshot hook (defense in depth, deferred until 1+2 are stable).** Auto-fires inside `pine_claim`: snapshots `pine_list_scripts` + per-script `/get/<id>/last` source bodies to `~/.tv-mcp-snapshots/preflight-<lane>-<ts>.json`, records editor's current binding. On `pine_release` or process exit, diffs versions and loudly flags any version bump on a pre-existing slot (i.e., a slot the lane shouldn't have touched). Rotation: keep last 20. Decision 2026-06-07: do NOT build until 1+2 have shipped and run a few real Pine sessions without incident — pre-flight is the safety net for unknown future bugs, not a substitute for fixing the known ones. Layer C (per-instance Chrome profiles) is DEAD — TV ToS prohibits concurrent sessions per account.
-
-### Blocked downstream
-`tradibos-nautilus` Pine ingestion for the three-way compare harness on H2 (`/root/tradibos-nautilus/harness/three_way_compare.py`). PyParity + Nautilus lanes work; Pine slot stays empty until Fix 1+2 ship.
+5-site mechanical patch on disk (uncommitted): `m.editor.getEditors()[0]` → `m.editor` at L438/602/819/842; `m.editor.getEditors()[0].getValue()` → `m.editor.getValue()` at L532. 50/50 offline unit tests still pass. Patched code is JS-template strings; verification requires Claude Code restart.
 
 ## Immediate next action
 
-1. **Restart Claude Code** so MCP lanes pick up the new Fix 1+2 code in `src/core/pine.js`. New tool signatures: `pine_new({type, name?, source?})` and `pine_save({name?, verify_timeout_ms?})`.
-2. **Live integration test through MCP:**
-   - Pin lane (any free), claim Pine.
-   - `pine_new(type='indicator')` → expect `action: 'unbound_draft_created'`, title button shows "Untitled script".
-   - `pine_set_source({source: '//@version=6\nindicator("tv-mcp-restart-test-<ts>")\nplot(close)'})`.
-   - `pine_save({name: 'tv-mcp-restart-test-<ts>'})` → expect `success: true, action: 'saved_as_new', scriptIdPart: <real id>, verified: true`.
-   - `pine_list_scripts` → confirm new entry exists.
-   - `pine_get_source` → confirm source matches what we set.
-3. **Cleanup probe scripts** from Session 9 — four `tvmcp_probe_*` / `tvmcp_fix1_e2e_*` entries plus the restart-test one. Either via TV UI or by probing the delete endpoint (likely `/pine-facade/delete/<id>`, not captured Session 9).
+1. **Restart Claude Code.** MCP processes are frozen on pre-patch code (retried `pine_new` after the disk edit and got the same error from PID 50884).
+2. **Re-run the Session 9 live test:**
+   - Free lane → `tab_pin` a chart → `pine_claim`
+   - `pine_new(type='indicator')` → expect `action: 'unbound_draft_created'`
+   - `pine_set_source({source: '//@version=6\nindicator("tv-mcp-restart-test-<ts>")\nplot(close)'})`
+   - `pine_save({name: 'tv-mcp-restart-test-<ts>'})` → expect `success: true, action: 'saved_as_new', scriptIdPart: <id>, verified: true`
+   - `pine_list_scripts` → confirm new entry; `pine_get_source` → confirm source matches
+3. **If green:** commit `fix(pine): FIND_MONACO return-shape mismatch in Fix 1+2 (5 sites)`. Then clean up the 5 leftover probes (4 `tvmcp_probe_*` / `tvmcp_fix1_e2e_*` + the new restart-test). `POST /pine-facade/delete/<urlencoded-id>` returns 401 "not an owner" and `DELETE` is CORS-blocked from page context — capture the real endpoint via Chrome devtools while deleting one via the TV UI.
+4. **If still red:** `git diff src/core/pine.js HEAD` to confirm the patch is on disk; verify the six MCP child node processes actually restarted (fresh start times in `ps aux | grep tv-mcp`).
 
-## Discovered endpoints (Session 9 probe)
+## Reference (still valid from Session 9)
+- `POST /pine-facade/save/new?name=<urlencoded>&allow_overwrite=true|false` (FormData `source=`) → creates slot, returns `body.result.metaInfo.scriptIdPart`. TV normalizes line-endings to `\r\n`.
+- `GET /pine-facade/get/<urlencoded-id>/<version|"last">` → fetches source.
+- Monaco actions reachable via `editor.getSupportedActions()`: `new_indicator`, `new_strategy`, `open.script`, etc. (`.run()` them).
+- Monaco commands NOT in actions: `:save.script` via `editor._commandService.executeCommand` (gated on `isSaveEnabled`).
+- Title button `[data-qa-id="pine-script-title-button"]` shows bound slot name or "Untitled script".
 
-- `POST https://pine-facade.tradingview.com/pine-facade/save/new?name=<urlencoded>&allow_overwrite=true|false` with FormData body `source=<pine source>` → creates new cloud script slot. Response: `{success: true, result: {metaInfo: {scriptIdPart, description, pine: {version}, ...}}}`.
-- `POST https://pine-facade.tradingview.com/pine-facade/parse_title` with FormData `source=` → extracts title from source code.
-- `GET https://pine-facade.tradingview.com/pine-facade/get/<urlencoded-id>/<version|"last">` → fetches versioned source.
-- TV normalizes line endings to `\r\n` on store — verify-poll comparison must normalize before equality.
-
-## Monaco editor primitives (Session 9 probe)
-
-- Actions: `vs.editor.ICodeEditor:1:new_indicator`, `:new_strategy`, `:open.script`, `:detach.window`, `:detach.tab`, `:add.to.chart`, `:discard_all_changes`, `:open.history` — all in `editor.getSupportedActions()`. Call `.run()`.
-- Commands (NOT in getSupportedActions but reachable via `editor._commandService.executeCommand`): `:save.script`, gated on context key `isSaveEnabled && editorId == 'vs.editor.ICodeEditor:1'`.
-- Editor binding: title button `[data-qa-id="pine-script-title-button"]` shows current bound slot name, or "Untitled script" when unbound.
-- `new_indicator`/`new_strategy` is purely client-side (zero network) — it swaps Monaco to a new unbound model. Safe to call without any cloud side effects.
-
-## When to open this project again
-
-- **NOW**: Fix 1+2 above. tradibos-nautilus is blocked.
-- A friend installs from the GH release and hits a bug — file an issue, fix on a branch, cut v1.0.2.
-- Upstream `tradesdontlie/tradingview-mcp` lands a change worth vendoring.
-- A new feature ask.
-
-## Known gotchas (read before editing `src/`)
-
-- **MCP server processes don't hot-reload.** Six `tv-mcp-a..f` processes spawn at Claude Code session start and freeze on that code. To pick up `src/` changes, restart Claude Code. Fix 3 is in code but the running processes don't yet know about `pine_claim` until the next restart.
-- **Singleton pine_editor claim is account-global, not per-tab.** Two MCP processes on the same Chrome cannot both write Pine code — only one can hold the claim. This is intentional because TV cloud script slots are account-shared. To work around: split into separate Chrome user-data-dirs (spec Layer C, not built).
-- **`evaluate` alias trap** in `src/core/chart.js`, `src/core/drawing.js`, `src/core/replay.js`: module imports `evaluate as _evaluate`, so bare `evaluate(...)` calls only work after `const { evaluate } = _resolve(_deps);`. New functions must mimic the existing ones.
-- **Pin state ≠ registry state.** `setPin`/`clearPin` in `connection.js` are in-process-only (transient reconnect). `claimAndPin`/`releaseAndUnpin` also touch `~/.tv-mcp-registry.json`. Tools use the registry path; internal reconnect must use bare `setPin`.
-- **vm-context object identity** (S5) — `assert.deepEqual({}, vmCtx.metrics)` fails strict-equality even when both are empty. Use `Object.keys(...).length === 0` for empty-object checks across realms. See `tests/data_strategy_helpers.test.js`.
-- **`chrome_launch`'s 5s wait can be a false negative** on truly cold starts. If it returns `launched_but_not_responsive`, probe `chrome_health` once before assuming failure.
-- **`mcp_log_tail` is opt-in.** Set `TV_MCP_LOG=1` or `TV_MCP_LOG_FILE=/path` at server start.
+## Known gotchas
+- **FIND_MONACO returns `{editor, env}` NOT the monaco namespace.** `m.editor` = editor instance (has `setValue`/`getValue`/`getModel`/`getSupportedActions`). `m.env` = namespace (has `editor.getEditors`). Session 10's regression was getting this backwards.
+- **MCP processes don't hot-reload.** Restart Claude Code to pick up `src/` edits.
+- **Singleton pine_editor claim is account-global.** Two MCP processes can't both write Pine — escape hatch is `TV_MCP_PINE_WRITE_UNGATED=1`.
+- **`ui_evaluate` does NOT await Promises** — async IIFEs return `{}`. Stash result on `window.__X`, poll via subsequent sync evaluate.
+- **`evaluate` alias trap** in `src/core/chart.js`/`drawing.js`/`replay.js`: imported as `_evaluate`, requires `const { evaluate } = _resolve(_deps)` before bare calls.
+- **`chrome_launch`'s 5s wait can be a false negative** on cold starts — probe `chrome_health` before assuming failure.
+- **Pin state ≠ registry state.** `setPin`/`clearPin` in `connection.js` are in-process-only; `claimAndPin`/`releaseAndUnpin` also touch `~/.tv-mcp-registry.json`. Tools go through the registry path; internal reconnect uses bare `setPin`.
 
 ## Hot files
+- `src/core/pine.js` — uncommitted Session-10 patch at L438/532/602/819/842 (FIND_MONACO consumer fix).
+- `src/core/pin_registry.js` — v2 with pine_editor singleton (Fix 3).
+- `src/tools/pine.js` — claim/release/status tools at the bottom.
+- `tests/pin_registry.test.js` — 12 pine_editor cases.
+- `SPEC-pine-safe-create.md`, `INCIDENT-pine-overwrite-2026-06-05.md`.
 
-- `src/core/pin_registry.js` — extended with pine_editor slot (S8). v1→v2 migration is transparent.
-- `src/core/pine.js` — `requirePineClaim()` gate at top of every write function. `pineClaim`/`pineRelease`/`pineClaimStatus` exports. **Fix 1+2 live here** (`newScript` at ~line 508 of pre-S8 code, `save` at ~line 347).
-- `src/tools/pine.js` — three new MCP tools at the bottom.
-- `tests/pin_registry.test.js` — 12 new pine_editor cases at the bottom.
-- `SPEC-pine-safe-create.md` — the spec for Fix 1+2. Open questions there gate Fix 1.
-- `INCIDENT-pine-overwrite-2026-06-05.md` — full repro and recovery.
-
-## Related repos / locations
-
-- `~/tradibos/` (strategy library, `ogdeeeezy/tradibos`)
-- `~/lib/schwab-market-data/` and `/root/schwab-market-data/` on H2 (paper trader using v6a CL on `NYMEX:CL1!`).
-- `~/tradibos-nautilus/` on H2 — Pine slot in three-way harness is blocked.
+## Related repos
+- `~/tradibos/`, `~/lib/schwab-market-data/` + `/root/schwab-market-data/` on H2, `~/tradibos-nautilus/` on H2 (Pine slot blocked).
 
 ## Open questions for user
-
 None.

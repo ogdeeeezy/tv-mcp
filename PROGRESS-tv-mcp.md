@@ -1,6 +1,27 @@
 # PROGRESS-tv-mcp
 
-> Sessions 1-5 archived → `docs/archive/archive-progress-tv-mcp.md`
+> Sessions 1-7 archived → `docs/archive/archive-progress-tv-mcp.md`
+
+---
+
+## Session 10: 2026-06-08 — Fix 1+2 regression caught post-restart, 5-site patch
+
+### Done
+- **Live integration test of Fix 1+2 — FAILED on actual MCP tools.** Claimed Pine on lane `tv-mcp-a` (chart `YKaDEilf`), called `pine_new(type='indicator')` → `TypeError: m.editor.getEditors is not a function at <anonymous>:32:29`. Same error on retry.
+- **Root cause via direct page probe.** `FIND_MONACO` returns `{editor: <Monaco editor instance>, env: <monaco namespace>}` — `m.editor` is the editor INSTANCE (has `setValue`/`getValue`/`getModel`/`getSupportedActions`, no `getEditors`); `m.env.editor.getEditors` is the namespace method. The 5 new callsites in Fix 1+2 commit `a3cfcd6` (lines 438, 532, 602, 819, 842) wrote `m.editor.getEditors()[0]` as if `m` were the monaco namespace. Pre-`a3cfcd6` consumers (commit `9274ff3`, still in the file) use `m.editor.setValue(...)` / `m.editor.getValue()` correctly — they treat `m.editor` as the instance. Fix 1+2 wrote against a different mental model of FIND_MONACO's return shape.
+- **5-site mechanical patch applied on disk (uncommitted).** `m.editor.getEditors()[0]` → `m.editor` at L438/602/819/842; `m.editor.getEditors()[0].getValue()` → `m.editor.getValue()` at L532. `grep getEditors src/core/pine.js` confirms only the legitimate FIND_MONACO internals at L94-95 remain.
+- **Confirmed MCP processes are frozen on pre-patch code.** Re-ran `pine_new(type='indicator')` after the disk edits — same error from PID 50884. Verifies the HANDOFF gotcha; restart is the only verification path from here.
+- **50/50 offline unit tests still pass** (`pine_analyze.test.js` + `pin_registry.test.js`). The patched code is JS-template strings injected via CDP — not exercised by Node-level tests.
+- **Delete-endpoint probe inconclusive (2-strike pivot).** `POST /pine-facade/delete/<urlencoded-id>` returned 401 `{"code":401,"message":"User is not an owner of pine"}` — surprising since the same cookies POST happily to `/save/new`. `DELETE` method CORS-blocked from page context. Stopped probing per empty-data-pivot; capture the real endpoint via Chrome devtools while deleting one through TV UI.
+
+### Decisions
+- **Patch left uncommitted at session end.** Verification requires a Claude Code restart that no in-session action can trigger. Next instance runs the live test first, then commits the patch with whatever wording the verification proof supports. Committing now would couple "patch correctness" to "still works on restart" with no proof for either claim.
+- **Did not delete the 4 Session 9 probe scripts.** Delete endpoint not captured; user can clean up via TV UI in seconds.
+
+### Next
+- **Restart Claude Code + re-run Session 9 live test sequence** through the MCP tools (`pine_new` → `pine_set_source` → `pine_save({name})` → `pine_list_scripts` → `pine_get_source`). If green, commit the patch with message `fix(pine): FIND_MONACO return-shape mismatch in Fix 1+2 (5 sites)`.
+- **Cleanup the 5 probe scripts** (4 from Session 9 + the new `tv-mcp-restart-test-<ts>`) — via TV UI, capturing the delete endpoint via devtools.
+- **Fix 4 still queued** (pre-flight snapshot hook) — deferred until Fix 1+2 verified post-restart and run a few real sessions clean.
 
 ---
 
@@ -43,38 +64,3 @@
 - **Carryover: Fix 1 — `pine_new` actually creates a server-side slot.** Network probe gates this. First move next session: re-pin lane `e` to a fresh chart (or `YKaDEilf` again), reinstall the fetch interceptor (see `tests/recap` HTML for the snippet), trigger TV's "New script" menu programmatically, capture the pine-facade POST. Implementation pattern is in `SPEC-pine-safe-create.md` — POST to discovered endpoint → call `openScript()` to rebind editor → return real `scriptIdPart`.
 - **Carryover: Fix 2 — reliable `save` with verification.** Monaco action `vs.editor.ICodeEditor:1:save.script` (proven in 2026-06-05 recovery) + pine-facade `/get/{id}/last` poll. Drop-in once Fix 1 ships.
 - **After Fix 1+2 ship:** Claude Code restart + live integration test (two `pine_new` calls → +2 `pine_list_scripts` entries with `tv-mcp-probe-*` names; set source + save + verify roundtrip via pine-facade). Probe scripts named `tv-mcp-probe-<unix-ts>` are pre-approved as throwaway.
-
----
-
-## Session 7: 2026-05-19 — v1.0.1 polish & cleanup
-
-### Done
-- **README MCP-config example surfaced** — six-lane JSON block now visible in the main Quick Start flow instead of hidden behind `<details>`. A separate `<details>` collapsible documents the single-server variant for users who only want one lane. Someone reading the README in isolation now sees the correct config shape without running `tv setup`.
-- **Stale "Symbol regex misses titles without parentheses" gotcha removed from `CLAUDE.md`** — the underlying bug was already fixed in `55a55e6` (parser widened to handle both parenthesized and leading-symbol formats, 14 tests covering both shapes + null-return cases). Documentation drift, not new code.
-- **Pre-split backups deleted** — `~/tradingview-mcp.backup-2026-05-11/` (145M) and `~/tv-mcp.rsync-staging-2026-05-11/` (6.7M). `diff -rq` confirmed all unique content is either pre-split tradibos material (lives in `~/tradibos/` now) or deprecated Electron launch scripts (Phase 3 removed). `MCP-AUDIT.md` already merged in as `docs/AUDIT.md` (byte-identical). ~152M reclaimed.
-- **v1.0.1 tagged + GitHub release published** covering "polish & cleanup."
-- 80/80 unit tests still pass.
-
-### Decisions
-- **No new tests for `parseSymbolFromTitle`** — the three categories the task asked for (leading-symbol, parenthesized, null-return) are already covered with 9 cases across the existing suite. Adding redundant tests would just be noise.
-
-### Next
-- No carry-overs. v1.0.1 is the end of the polish pass.
-- Next tv-mcp session opens only on real demand: a friend hits a bug, an upstream change to vendor in, or a new feature ask.
-
----
-
-## Session 6: 2026-05-18 — v1.0.0 released, README polish, CL position checked
-
-### Done
-- **v1.0.0 tagged + GitHub release published** — annotated tag on `9e26de3`, release at https://github.com/ogdeeeezy/tv-mcp/releases/tag/v1.0.0. Notes cover: one-command onboarding (`npm run setup` / `tv setup`), issue #1 closed end-to-end, 80/80 tests, CI matrix `{ubuntu, macos, windows} × node {18, 20, 22}`, six-lane default, no-npm rationale.
-- **README CLI block polished** (`9e26de3`) — `tv setup` now leads both the Quick Examples and the All Commands list. Added a sentence explaining what it does (isolated profile + CDP launch + config snippet). Was a S4/S5 carry-over.
-- **Schwab CL position sanity-checked** on H2 — log shows position alive (entry $95.64, stop $85.24, trail still inactive), cron running on schedule. Latest 4h close $102.43 → position is **+$6.79/contract unrealized**, not in drawdown.
-- Token refresh blip 6:15-7:15 AM ET 2026-05-18 (recovered by 8:15) — single transient, no follow-up needed unless it recurs.
-
-### Decisions
-- **Release notes published to GitHub, not as a separate CHANGELOG.md.** Single-source-of-truth at the GitHub release page; if a CHANGELOG ever matters for offline browsing, generate it from `gh release list --json` later.
-
-### Next
-- All shipping-readiness work is done. No carry-overs.
-- Next tv-mcp session opens only on real demand.
