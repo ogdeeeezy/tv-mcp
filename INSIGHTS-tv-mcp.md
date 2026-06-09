@@ -128,3 +128,22 @@ Three implications:
 - Title-button DOM (`[data-qa-id="pine-script-title-button"]`) is fine for human-readable status, but for decisions that gate writes, read `isSaveEnabled` off the editor's `_contextKeyService`. The title button can lag the editor state, and `document.querySelector` can pick up the wrong node if both popout-dialog and main-pane wrappers exist.
 
 The Session 11 verification (commit `e7b4a2f`) confirmed this by ICC rv3 — Spec Viz remaining at v11.0 throughout a successful `pine_new → pine_set_source → pine_save(name=...)` cycle on a different tab. The fuse held exactly because the new model had `isSaveEnabled=false` and the saved-as-new path routed through `pine-facade/save/new` with `allow_overwrite=false`, never invoking `save.script` on the still-bound foreign slot.
+
+## bottomWidgetBar API surface (2026-06)
+
+**Captured:** 2026-06-09
+
+TV removed `bottomWidgetBar.hideWidget(name)` somewhere between the prior e2e capture and Chrome 149. Probing the live object showed:
+
+- **Public own functions:** `open`, `close`, `hide`, `show`, `toggleMaximize`, `toggleMinimize`.
+- **Public prototype functions (relevant ones):** `showWidget(name)`, `activateWidget(name)`, `toggleWidget(name)`, `getWidgetByName(name)`, `isVisible()`, `activeWidget()`, `activateScriptEditorTab()`, `setWidgetAvailability(name, available)`.
+- **Private (underscored) functions:** `_hideWidget(name)`, `_showWidget(name)`, etc. — implementation details, don't depend on them.
+
+The migration path for code that used to call `bottomWidgetBar.hideWidget('pine-editor')`:
+- For "close whatever is active": `bottomWidgetBar.close()` (parameterless).
+- For "toggle a specific widget": `bottomWidgetBar.toggleWidget('pine-editor')` — preserved.
+- For "show a specific widget": `bottomWidgetBar.showWidget('pine-editor')` — preserved.
+
+There is no straight equivalent of `hideWidget('pine-editor')` that targets a specific widget without affecting active state. `close()` is the closest semantic match for the e2e test case ("open → close again to verify toggling works"). If precise per-widget hiding is ever needed by a tool, `toggleWidget(name)` after checking `activeWidgetName()` is the safest pattern.
+
+Lesson: when TV strips a public method, look at the new own-methods (`close`, `hide`) before reaching for the underscored private siblings. Underscored methods are internal and can be renamed without TV considering it a breaking change.

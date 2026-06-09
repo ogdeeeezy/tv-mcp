@@ -136,3 +136,21 @@
 - (Maybe) update README CLI section.
 - Tradibos context switch.
 
+
+---
+
+## Session 8: 2026-06-05 — Pine editor multi-instance claim (Fix 3 of 3 shipped)
+
+### Done
+- **Fix 3 — multi-instance Pine editor claim registry** (`2f4fbb6`) — bumped `~/.tv-mcp-registry.json` v1→v2 with backwards-compat v1 read; added singleton `pine_editor` slot alongside existing tab pins; new tools `pine_claim` / `pine_release` / `pine_claim_status`; `requirePineClaim()` gate on every write tool (`newScript`, `setSource`, `save`, `smartCompile`, `compile`); `TV_MCP_PINE_WRITE_UNGATED=1` escape hatch (off by default). Process-exit cleanup hooks into existing `releaseAllSync`. 12 new tests (claim/release/conflict-via-real-child-process/force-override/dead-PID-prune/v1-backward-compat). **34/34 pin_registry tests pass, 47/47 other unit tests pass.**
+- Network probe for Fix 1 started but paused before triggering "New" — lane `tv-mcp-e` pinned to chart `YKaDEilf` (GC1! 1h), fetch+XHR interceptor installed in `window.__pineProbe.calls`. Both die on Claude Code restart, so next instance re-pins fresh.
+
+### Decisions
+- **Shipped Fix 3 before Fixes 1+2.** It's the cross-cutting safety net — even if 1+2 land buggy later, two instances can no longer silently clobber each other on shared TV cloud script slots. The pin_registry pattern already existed (Session 3 work), so Fix 3 was a clean extension with no new infra.
+- **Chart-per-lane workflow isolation does NOT replace Fixes 1+2.** The 2026-06-05 incident was a single-instance bug (pine_new lies about creating + pine_save silently no-ops). Separate charts per workstream reduce blast radius from "any account script" to "whatever the tab last loaded," but don't fix the bug.
+- **Singleton (account-global) pine_editor claim, not per-tab.** TV cloud script slots are shared across the whole account, so coordination must be too. Spec Layer A.
+
+### Next (carryover)
+- Fix 1 — `pine_new` actually creates a server-side slot.
+- Fix 2 — reliable `save` with verification.
+- After Fix 1+2 ship: Claude Code restart + live integration test.

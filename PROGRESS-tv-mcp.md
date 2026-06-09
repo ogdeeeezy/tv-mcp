@@ -1,6 +1,26 @@
 # PROGRESS-tv-mcp
 
-> Sessions 1-7 archived → `docs/archive/archive-progress-tv-mcp.md`
+> Sessions 1-8 archived → `docs/archive/archive-progress-tv-mcp.md`
+
+---
+
+## Session 11: 2026-06-08/09 — Fix 1+2 verified green, e2e fixes staged
+
+### Done
+- **Fix 1+2 verification GREEN** (`e7b4a2f`) — coordinated force-claim with the live ICC instance (`pine_editor` registry was held by stale PID 10111). Ran `pine_claim → pine_new → pine_set_source → pine_save({name}) → pine_list_scripts → pine_get_source → pine_release` on lane `tv-mcp-a` (chart "gold"). Result: `action: saved_as_new`, `verified: true`, slot `USER;b465c8a4e8854a58956e59822e644fbf` landed in list with byte-exact source. ICC rv3 — Spec Viz at v11.0 untouched throughout.
+- **HANDOFF + INSIGHTS closeout** (`39fd173`) — replaced "awaiting verify" with the Session 11 proof. New INSIGHTS captures: dialog-as-fuse mechanism (`isSaveEnabled` + URL-encoded `placement%3Ddialog` as the real safety, not the title-button DOM); only ONE Monaco editor instance ever exists; URI sniffing must use URL-encoded form.
+- **3 e2e test fixes staged (uncommitted).** `tv_launch` binary detection — converted to no-op assertion since Phase 3 deprecates the desktop path. `ui_open_panel` — replaced removed `hideWidget(name)` with parameterless `close()` (probed live: own-method `close` replaces it). `replay_stop` — added `isReplayStarted` re-check before `goToRealtime` to avoid race when prior tests left state dirty. INSIGHTS appendix added on the new `bottomWidgetBar` API surface.
+- **`openScript` rebinding gap explored, deferred.** Live probing showed no direct "open script by id" routine in the immediate React surfaces around the Pine editor. The handler likely lives further down the title-button click chain or in a `_pineScriptManager`-style service we didn't find. Defer — chasing it further risks mutating ICC's working state.
+
+### Decisions
+- **Force-claim was safe** because the ICC instance was paused explicitly waiting for the FIND_MONACO patch to land. Coordinated via cross-instance message before forcing.
+- **e2e fixes left uncommitted** because in-session `npm test` verification hit tool-runtime backgrounding. Mechanically obvious changes — safer to have the next instance run the suite and ship the commit.
+- **Stopped probing for the delete endpoint** mid-session. User is doing manual UI cleanup of 5 stale probe scripts; capturing the real endpoint via DevTools is a follow-up.
+
+### Next
+- **First action:** `cd ~/tv-mcp && npm test` to verify the 3 staged e2e fixes pass. Expect ~160/160 with no fail (was 157/160 before fixes). If green, commit `fix(e2e): TV API drift (hideWidget removed, replay_stop race, tv_launch deprecated)` and push.
+- `openScript` rebinding gap (sleeping bug) — needs deeper live probe of TV's internal load-by-id routine.
+- Capture real `pine-facade` delete endpoint via DevTools while user deletes one script through TV UI. Wire `pine_delete` tool.
 
 ---
 
@@ -46,21 +66,3 @@
 - **Carryover: post-restart MCP-level live test.** MCP server processes don't hot-reload, so the new `pine_new(name?, source?)` and `pine_save({name?, verify_timeout_ms?})` tool signatures aren't reachable through the running lanes — restart Claude Code to pick them up. Then: claim Pine on a fresh chart, `pine_new(type='indicator')` → verify editor goes to "Untitled script" + isSaveEnabled=true, `pine_set_source(<probe code>)`, `pine_save({name: 'tv-mcp-restart-test-<ts>'})` → verify returned scriptIdPart appears in `pine_list_scripts`, source matches via `pine_get_source`.
 - **Cleanup pass:** delete the four probe scripts via TV UI (or implement a `pine_delete_script(scriptIdPart)` tool — the delete endpoint probably lives at `/pine-facade/delete/<id>` but wasn't captured this session).
 - **Fix 4 still queued** (pre-flight snapshot hook) — deferred until Fix 1+2 prove stable across a few real Pine work sessions per the 2026-06-07 decision.
-
----
-
-## Session 8: 2026-06-05 — Pine editor multi-instance claim (Fix 3 of 3 shipped)
-
-### Done
-- **Fix 3 — multi-instance Pine editor claim registry** (`2f4fbb6`) — bumped `~/.tv-mcp-registry.json` v1→v2 with backwards-compat v1 read; added singleton `pine_editor` slot alongside existing tab pins; new tools `pine_claim` / `pine_release` / `pine_claim_status`; `requirePineClaim()` gate on every write tool (`newScript`, `setSource`, `save`, `smartCompile`, `compile`); `TV_MCP_PINE_WRITE_UNGATED=1` escape hatch (off by default). Process-exit cleanup hooks into existing `releaseAllSync`. 12 new tests (claim/release/conflict-via-real-child-process/force-override/dead-PID-prune/v1-backward-compat). **34/34 pin_registry tests pass, 47/47 other unit tests pass.**
-- Network probe for Fix 1 started but paused before triggering "New" — lane `tv-mcp-e` pinned to chart `YKaDEilf` (GC1! 1h), fetch+XHR interceptor installed in `window.__pineProbe.calls`. Both die on Claude Code restart, so next instance re-pins fresh.
-
-### Decisions
-- **Shipped Fix 3 before Fixes 1+2.** It's the cross-cutting safety net — even if 1+2 land buggy later, two instances can no longer silently clobber each other on shared TV cloud script slots. The pin_registry pattern already existed (Session 3 work), so Fix 3 was a clean extension with no new infra.
-- **Chart-per-lane workflow isolation does NOT replace Fixes 1+2.** The 2026-06-05 incident was a single-instance bug (pine_new lies about creating + pine_save silently no-ops). Separate charts per workstream reduce blast radius from "any account script" to "whatever the tab last loaded," but don't fix the bug. User confirmed proceeding with Fix 1+2 next session.
-- **Singleton (account-global) pine_editor claim, not per-tab.** TV cloud script slots are shared across the whole account, so coordination must be too. Spec Layer A.
-
-### Next
-- **Carryover: Fix 1 — `pine_new` actually creates a server-side slot.** Network probe gates this. First move next session: re-pin lane `e` to a fresh chart (or `YKaDEilf` again), reinstall the fetch interceptor (see `tests/recap` HTML for the snippet), trigger TV's "New script" menu programmatically, capture the pine-facade POST. Implementation pattern is in `SPEC-pine-safe-create.md` — POST to discovered endpoint → call `openScript()` to rebind editor → return real `scriptIdPart`.
-- **Carryover: Fix 2 — reliable `save` with verification.** Monaco action `vs.editor.ICodeEditor:1:save.script` (proven in 2026-06-05 recovery) + pine-facade `/get/{id}/last` poll. Drop-in once Fix 1 ships.
-- **After Fix 1+2 ship:** Claude Code restart + live integration test (two `pine_new` calls → +2 `pine_list_scripts` entries with `tv-mcp-probe-*` names; set source + save + verify roundtrip via pine-facade). Probe scripts named `tv-mcp-probe-<unix-ts>` are pre-approved as throwaway.
