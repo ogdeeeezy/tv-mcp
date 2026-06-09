@@ -79,3 +79,38 @@ That's the same number of steps as the npm path, and the `tv setup` command does
 - The tool has serious downstream dependents that would benefit from semver
 
 For a single-user CLI + MCP server shared with technical-enough friends, none of those apply.
+
+## pin_registry composes cleanly for non-tab resource claims
+
+**Captured:** 2026-06-05
+
+Fix 3 added a global `pine_editor` slot to `~/.tv-mcp-registry.json` without introducing any new infrastructure — same lock file, same atomic-write, same exit-handler path, same `isAlive(pid)` prune. The shape went from `{pins: {targetId → entry}}` to `{pins: {...}, pine_editor: entry | null}` with a v1→v2 backwards-compatible read.
+
+The pattern that made this cheap: the existing `claim()` function was purely targetId-scoped (tab pins), but the lock/prune/atomic-write machinery was generic. Splitting "what to claim" (caller's domain knowledge) from "how to claim" (registry's mechanism) meant adding a sibling singleton field cost ~80 lines of mirror-pattern code and zero new locking.
+
+**When this generalizes:** any future "one of N parallel MCP processes can hold global resource X at a time" need can follow the same template. Examples that would fit: a singleton "live-replay session" claim (only one process can run replay_start at a time without confusing TV's replay state), a singleton "alert-dialog open" claim (only one process can be mid-alert-create wizard).
+
+**What would change the calculus:** if a future claim needs richer semantics (queue, fairness, timeouts), the in-line append pattern stops scaling and the registry should split into a dispatch layer + per-claim modules.
+
+## MCP process freeze means safety nets ship blind in the same session
+
+**Captured:** 2026-06-05
+
+The six `tv-mcp-a..f` processes spawn at Claude Code session start and freeze on the code that exists at that moment. This is documented as a gotcha for editing tools mid-session, but it has a subtler consequence: **a safety-belt fix can be merged + committed + tested at the unit level but NOT verified live** in the same session it was written. The running MCP processes still have the pre-fix code; the new `pine_claim` tool is unreachable until Claude Code restarts.
+
+What this means for planning:
+- Don't try to "test the new code live" before restart. It will appear to work because the running code is unchanged — false-pass.
+- The unit-test suite must be the proof point for "this code is correct," not live integration. Integration tests come after a restart cycle.
+- Plan safety belts and behavior fixes in the same commit so a single restart cycle proves both. Don't ship a safety belt and a behavior fix in separate restart cycles unless one strictly depends on the other.
+
+This bit Session 8: Fix 3 is in code but the running process can't surface the new tools — the next instance must restart to verify.
+
+## TaskUpdate description-rewrite preserves ephemeral state across restart
+
+**Captured:** 2026-06-05
+
+When live state exists that dies on Claude Code restart (a Chrome tab pin, an injected DOM interceptor, a CDP connection), `TaskUpdate` with a rewritten description is a clean way to write down "what is currently true but will be gone" so the next instance can re-establish it.
+
+Session 8 example: lane `tv-mcp-e` was pinned to chart `YKaDEilf`, and `window.__pineProbe.calls` had a fetch+XHR interceptor installed. Both die when Claude Code restarts. The pin re-claim is trivial; re-installing the interceptor verbatim is tedious unless the new instance knows the exact snippet. The task description got: `PIN ALREADY DONE: lane tv-mcp-e was pinned to chart_id YKaDEilf (COMEX:GC1! 1h) and a fetch+XHR interceptor was installed in that tab capturing pine-facade traffic into window.__pineProbe.calls. Both die on Claude Code restart — next instance starts fresh. Step left undone: trigger TV's "New script" UI action and inspect captured POST request shape.`
+
+Tasks persist across instances because they live in the harness's storage, not the conversation. PROGRESS docs and HANDOFFs are the right place for "state we want to keep around" — but for "ephemeral state that has a narrow re-establish window," a task description is faster, more granular, and naturally tied to the work that needs it.

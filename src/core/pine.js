@@ -435,7 +435,7 @@ async function getEditorBindingState() {
       var modelUri = null;
       var isSaveEnabled = null;
       if (m) {
-        var editor = m.editor.getEditors()[0];
+        var editor = m.editor;
         if (editor) {
           modelUri = editor.getModel() ? editor.getModel().uri.toString() : null;
           if (editor._contextKeyService) {
@@ -529,7 +529,7 @@ export async function save({ name = null, verify_timeout_ms = 5000 } = {}) {
     (function() {
       var m = ${FIND_MONACO};
       if (!m) return null;
-      return m.editor.getEditors()[0].getValue();
+      return m.editor.getValue();
     })()
   `);
   if (sourceProbe === null || sourceProbe === undefined) {
@@ -599,7 +599,7 @@ export async function save({ name = null, verify_timeout_ms = 5000 } = {}) {
     (function() {
       var m = ${FIND_MONACO};
       if (!m) return { ok: false, error: 'no editor' };
-      var editor = m.editor.getEditors()[0];
+      var editor = m.editor;
       if (!editor || !editor._commandService) return { ok: false, error: 'no command service' };
       try {
         editor._commandService.executeCommand('vs.editor.ICodeEditor:1:save.script');
@@ -816,7 +816,7 @@ export async function newScript({ type, name = null, source = null } = {}) {
     (function() {
       var m = ${FIND_MONACO};
       if (!m) return { ok: false, error: 'no editor' };
-      var editor = m.editor.getEditors()[0];
+      var editor = m.editor;
       var actions = editor.getSupportedActions();
       var action = actions.find(function(a) { return a.id === ${JSON.stringify(actionId)}; });
       if (!action) return { ok: false, error: 'action not registered: ' + ${JSON.stringify(actionId)} };
@@ -839,7 +839,7 @@ export async function newScript({ type, name = null, source = null } = {}) {
     (function() {
       var m = ${FIND_MONACO};
       if (!m) return { ok: false, error: 'no editor after swap' };
-      var editor = m.editor.getEditors()[0];
+      var editor = m.editor;
       editor.setValue(${escapedSource});
       return {
         ok: true,
