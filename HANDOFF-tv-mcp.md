@@ -23,6 +23,8 @@ ICC rv3 — Spec Viz (v11.0) untouched throughout. Tests: 94/94 unit pass. The 3
 
 ## Immediate next action
 
+**Before `npm test`: ensure no other Claude/CDP process is hitting Chrome.** A background test run during Session 11 reported 60 failures starting with an 18-minute `chart_set_symbol` timeout — caused by CDP contention with live `ui_evaluate` probes, NOT real regressions. On a quiet Chrome, expect ~160/160. Anything in the 80-100 pass range means Chrome is busy; close other lanes and retry.
+
 Two open follow-ups, both safe to defer:
 
 1. **`openScript` rebinding gap.** `openScript` currently does `fetch + setValue` only — it overwrites the editor buffer but does NOT update the title-button binding to the new slot. A subsequent `pine_save` then writes via `save.script` to whatever was previously bound. The 2026-06-05 incident shape, masked because callers always pass `name` to `pine_save` (which routes through the unbound path). Real fix needs TV's internal "open script by id" routine — discoverable by live probing the "Open Script" UI click handler or `chartWidgetCollection.activeChartWidget().model().activeStrategySource()` prototype. **Needs live Chrome session** — not unit-testable.
