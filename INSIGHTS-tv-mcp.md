@@ -114,3 +114,17 @@ When live state exists that dies on Claude Code restart (a Chrome tab pin, an in
 Session 8 example: lane `tv-mcp-e` was pinned to chart `YKaDEilf`, and `window.__pineProbe.calls` had a fetch+XHR interceptor installed. Both die when Claude Code restarts. The pin re-claim is trivial; re-installing the interceptor verbatim is tedious unless the new instance knows the exact snippet. The task description got: `PIN ALREADY DONE: lane tv-mcp-e was pinned to chart_id YKaDEilf (COMEX:GC1! 1h) and a fetch+XHR interceptor was installed in that tab capturing pine-facade traffic into window.__pineProbe.calls. Both die on Claude Code restart — next instance starts fresh. Step left undone: trigger TV's "New script" UI action and inspect captured POST request shape.`
 
 Tasks persist across instances because they live in the harness's storage, not the conversation. PROGRESS docs and HANDOFFs are the right place for "state we want to keep around" — but for "ephemeral state that has a narrow re-establish window," a task description is faster, more granular, and naturally tied to the work that needs it.
+
+## The Pine "safety fuse" is `isSaveEnabled`, not the title button
+
+**Captured:** 2026-06-09
+
+When `pine_new` runs the Monaco `new_indicator` action, the editor's model swaps to one whose URI carries URL-encoded `?placement%3Ddialog` and whose `isSaveEnabled` context key goes false. That `isSaveEnabled=false` is what stops `save.script` from overwriting a previously-bound slot — not the title-button DOM. The title button is a *secondary, lagging* signal.
+
+Three implications:
+
+- Anything sniffing the model URI for dialog state must match `placement%3Ddialog` (URL-encoded), not `placement=dialog`. The naive comparison silently returns false negatives.
+- There is only ONE Monaco editor instance on the page at any moment — `env.editor.getEditors()` returns length 1. The "dialog vs main" distinction is model state on the same instance, not a separate instance. Multiple `.monaco-editor.pine-editor-monaco` DOM nodes can coexist as stale leftovers from previous mounts, which earlier debugging mistook for live separate editors.
+- Title-button DOM (`[data-qa-id="pine-script-title-button"]`) is fine for human-readable status, but for decisions that gate writes, read `isSaveEnabled` off the editor's `_contextKeyService`. The title button can lag the editor state, and `document.querySelector` can pick up the wrong node if both popout-dialog and main-pane wrappers exist.
+
+The Session 11 verification (commit `e7b4a2f`) confirmed this by ICC rv3 — Spec Viz remaining at v11.0 throughout a successful `pine_new → pine_set_source → pine_save(name=...)` cycle on a different tab. The fuse held exactly because the new model had `isSaveEnabled=false` and the saved-as-new path routed through `pine-facade/save/new` with `allow_overwrite=false`, never invoking `save.script` on the still-bound foreign slot.
