@@ -4,6 +4,20 @@
 
 ---
 
+## Session 14: 2026-06-10 — pine_save({scriptIdPart}) smoke-tested PASS
+
+### Done
+- **In-place save end-to-end verified through the MCP** on a fresh `tv-mcp-d` lane post-restart. Created disposable slot via `pine_new(name="smoke-test-pine-save-2026-06-10")` → `USER;a4c2e20eb8754638ba6e2d609546903a` v1.0. `pine_open(name=...)` → loaded source, `bound: false`. `pine_set_source(<modified with marker>)` → 7 lines. `pine_save({scriptIdPart})` returned `action: "saved_to_existing"`, `version: "2.0"`, `verified: true` (pine-facade /get/last cross-check). `pine_list_scripts` confirmed: slot id unchanged, name preserved, title picked up from new `indicator()` declaration, modified timestamp current, no duplicate entry. Slot then `pine_delete`d cleanly (verified absent on re-list).
+- **Verdict:** the per-id overwrite path is the in-place edit workflow it was designed to be. Caller-provided `scriptIdPart` wins, no silent dupes, version bumps correctly.
+
+### Decisions
+- None. This was a verification run, no code changes.
+
+### Next
+- None outstanding. Project at clean rest state. All HANDOFF follow-ups closed.
+
+---
+
 ## Session 13: 2026-06-10 — openScript smoke-tested, pine_delete shipped
 
 ### Done
