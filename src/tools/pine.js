@@ -78,6 +78,19 @@ export function registerPineTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool(
+    'pine_delete',
+    'Delete a saved Pine Script slot from your TradingView cloud library. Targets by `scriptIdPart` (exact) or `name` (case-insensitive; refuses on ambiguous match). Requires pine_claim. Endpoint POST https://pine-facade.tradingview.com/pine-facade/delete/<urlencoded-id> (captured 2026-06-10 from TV web UI delete action). Verifies by re-listing and confirming absence.',
+    {
+      name: z.string().optional().describe('Saved script name (case-insensitive). Refuses if 0 or >1 matches.'),
+      scriptIdPart: z.string().optional().describe('Exact scriptIdPart (e.g. "USER;4b19bc6cc1814d0f99cef1e421c13346") from pine_list_scripts. Wins over `name` if both provided.'),
+    },
+    async ({ name, scriptIdPart }) => {
+      try { return jsonResult(await core.deleteScript({ name: name || null, scriptIdPart: scriptIdPart || null })); }
+      catch (err) { return jsonResult({ success: false, error: err.message, code: err.code || null, matches: err.matches || null }, true); }
+    }
+  );
+
   server.tool('pine_analyze', 'Run static analysis on Pine Script code WITHOUT compiling — catches array out-of-bounds, unguarded array.first()/last(), bad loop bounds, and implicit bool casts. Works offline, no TradingView connection needed.', {
     source: z.string().describe('Pine Script source code to analyze'),
   }, async ({ source }) => {

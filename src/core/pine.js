@@ -971,6 +971,101 @@ export async function openScript({ name }) {
   };
 }
 
+// ── Delete a saved script (pine-facade) ──
+//
+// Endpoint captured 2026-06-10 via fetch interceptor while user deleted scripts
+// from TV's UI: POST https://pine-facade.tradingview.com/pine-facade/delete/<id>
+// with NO body. Session cookies provide auth (credentials: 'include').
+//
+// Prior probe attempts hit www.tradingview.com (wrong host) and got 401 "not an
+// owner" — the subdomain matters. DELETE method is CORS-blocked from page context.
+
+export function selectDeleteTarget({ scripts, name, scriptIdPart }) {
+  if (scriptIdPart) {
+    const match = scripts.find((s) => s.id === scriptIdPart);
+    if (!match) {
+      const err = new Error(`scriptIdPart "${scriptIdPart}" not found in saved scripts`);
+      err.code = 'PINE_DELETE_NOT_FOUND';
+      throw err;
+    }
+    return { id: match.id, name: match.name, matched_by: 'scriptIdPart' };
+  }
+  if (name) {
+    const lc = name.toLowerCase();
+    const matches = scripts.filter((s) => (s.name || '').toLowerCase() === lc);
+    if (matches.length === 0) {
+      const err = new Error(`No saved script with name "${name}"`);
+      err.code = 'PINE_DELETE_NOT_FOUND';
+      throw err;
+    }
+    if (matches.length > 1) {
+      const err = new Error(
+        `Ambiguous name "${name}" — ${matches.length} saved scripts match. ` +
+          `Pass scriptIdPart explicitly. Matches: ${matches.map((m) => m.id).join(', ')}`
+      );
+      err.code = 'PINE_DELETE_AMBIGUOUS';
+      err.matches = matches.map((m) => ({ id: m.id, name: m.name, title: m.title }));
+      throw err;
+    }
+    return { id: matches[0].id, name: matches[0].name, matched_by: 'name' };
+  }
+  const err = new Error('Either `name` or `scriptIdPart` is required');
+  err.code = 'PINE_DELETE_MISSING_ARG';
+  throw err;
+}
+
+export async function deleteScript({ name = null, scriptIdPart = null } = {}) {
+  await requirePineClaim();
+
+  const listing = await listScripts();
+  const scripts = listing.scripts || [];
+
+  const target = selectDeleteTarget({ scripts, name, scriptIdPart });
+
+  const escapedId = JSON.stringify(target.id);
+  const result = await evaluateAsync(`
+    (function() {
+      return fetch(
+        'https://pine-facade.tradingview.com/pine-facade/delete/' + encodeURIComponent(${escapedId}),
+        { method: 'POST', credentials: 'include' }
+      ).then(function(r) {
+        return r.text().then(function(t) {
+          var parsed = null;
+          try { parsed = JSON.parse(t); } catch (e) {}
+          return { status: r.status, ok: r.ok, body: parsed, raw: parsed ? null : t.slice(0, 500) };
+        });
+      }).catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+
+  if (result?.error) throw new Error('pine-facade fetch failed: ' + result.error);
+  if (!result?.ok) {
+    throw new Error(
+      'pine-facade /delete returned HTTP ' +
+        result?.status +
+        ': ' +
+        JSON.stringify(result?.body || result?.raw || '').slice(0, 300)
+    );
+  }
+
+  // Verify: re-list and confirm the id is absent. TV's own UI does this same
+  // re-list immediately after a successful delete (observed in trace).
+  const verifyListing = await listScripts();
+  const stillPresent = (verifyListing.scripts || []).some((s) => s.id === target.id);
+
+  return {
+    success: true,
+    action: 'deleted',
+    scriptIdPart: target.id,
+    name: target.name,
+    matched_by: target.matched_by,
+    verified: !stillPresent,
+    verify_source: stillPresent
+      ? 'pine-facade /list/?filter=saved still contains id — delete returned 200 but id persists (server-side eventual consistency or silent refusal)'
+      : 'pine-facade /list/?filter=saved no longer contains id',
+  };
+}
+
 export async function listScripts() {
   const scripts = await evaluateAsync(`
     fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
