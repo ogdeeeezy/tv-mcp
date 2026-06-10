@@ -27,13 +27,14 @@ export function registerPineTools(server) {
 
   server.tool(
     'pine_save',
-    'Persist the current editor source to a TradingView cloud script slot, with end-to-end verification via pine-facade. Two paths based on editor state: (a) editor is bound to an existing script (title button shows the script name) — invokes Monaco save.script + polls pine-facade /get/{id}/last until the persisted source matches; (b) editor is unbound ("Untitled script") — requires `name` and POSTs directly to /pine-facade/save/new (allow_overwrite=false) to create a new slot. Replaces the pre-2026-06-07 Ctrl+S dispatch that silently no-op\'d on wrong focus (incident 2026-06-05).',
+    'Persist the current editor source to a TradingView cloud script slot, with end-to-end verification via pine-facade. Three paths based on args + editor state: (a) `scriptIdPart` provided — overwrites that specific slot in place via POST /pine-facade/save/next/<id> (captured 2026-06-10). This is the in-place edit path after pine_open. Wins over editor binding. (b) editor is bound to an existing script (title button shows the script name) AND no scriptIdPart — invokes Monaco save.script + polls pine-facade /get/{id}/last until the persisted source matches. (c) editor is unbound ("Untitled script") AND no scriptIdPart — requires `name` and POSTs to /pine-facade/save/new (allow_overwrite=false) to create a new slot. Replaces the pre-2026-06-07 Ctrl+S dispatch that silently no-op\'d on wrong focus (incident 2026-06-05).',
     {
-      name: z.string().optional().describe('Required when the editor is an unbound draft (post-pine_new). Creates a NEW cloud slot with this name. Refuses with allow_overwrite=false if a script with this name already exists. Ignored when editor is bound to an existing script.'),
+      name: z.string().optional().describe('Create-new path: required when the editor is an unbound draft and no scriptIdPart is given. Refuses with allow_overwrite=false if a script with this name already exists. Ignored when scriptIdPart is given or the editor is bound.'),
+      scriptIdPart: z.string().optional().describe('In-place overwrite path: e.g. "USER;2305e8248b1e4de28f93a4a9cea275e9" (use the value returned by pine_open or pine_list_scripts). Posts current editor source to that exact slot. Refuses if id is unknown.'),
       verify_timeout_ms: z.number().optional().describe('Max time to poll pine-facade for the persisted source to match the editor source. Default 5000.'),
     },
-    async ({ name, verify_timeout_ms }) => {
-      try { return jsonResult(await core.save({ name: name || null, verify_timeout_ms: verify_timeout_ms || 5000 })); }
+    async ({ name, scriptIdPart, verify_timeout_ms }) => {
+      try { return jsonResult(await core.save({ name: name || null, scriptIdPart: scriptIdPart || null, verify_timeout_ms: verify_timeout_ms || 5000 })); }
       catch (err) { return jsonResult({ success: false, error: err.message, code: err.code || null }, true); }
     }
   );
@@ -64,7 +65,7 @@ export function registerPineTools(server) {
 
   server.tool(
     'pine_open',
-    'Load a saved Pine Script\'s source into the editor as an UNBOUND draft. Runs the new_indicator Monaco action first to clear any prior binding (prevents the 2026-06-05 silent-overwrite incident shape), then fetches and setValues the script source. The editor will show "Untitled script" — to persist back, call pine_save({name: "<same name>"}) which creates a NEW slot (duplicating in your TV library). The per-id overwrite endpoint is a known follow-up.',
+    'Load a saved Pine Script\'s source into the editor as an UNBOUND draft. Runs the new_indicator Monaco action first to clear any prior binding (prevents the 2026-06-05 silent-overwrite incident shape), then fetches and setValues the script source. The editor will show "Untitled script". Returns the script\'s `script_id` (scriptIdPart) — pass that to pine_save({scriptIdPart}) to overwrite the slot in place after editing. Calling pine_save({name: "<same name>"}) instead would 409 (save/new refuses duplicate names).',
     {
       name: z.string().describe('Name of the saved script to open (case-insensitive match)'),
     },

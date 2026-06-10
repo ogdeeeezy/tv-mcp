@@ -517,7 +517,65 @@ async function saveNew({ name, source }) {
   };
 }
 
-export async function save({ name = null, verify_timeout_ms = 5000 } = {}) {
+// ── Direct POST to pine-facade/save/next/<id> ──
+//
+// Endpoint captured 2026-06-10 via fetch interceptor while user did Cmd+S on a
+// bound editor (script "ICC rv1 Strategy" loaded via TV's UI):
+//   POST /pine-facade/save/next/<urlencoded-scriptIdPart>?allow_create_new=false&name=<urlencoded-name>
+//   FormData { source }
+// Updates the existing slot in place (version bumps). `allow_create_new=false`
+// is the safety knob — refuses to silently create if the id no longer exists.
+//
+// Sibling to saveNew (which hits /save/new for fresh-slot creation).
+async function saveNext({ scriptIdPart, name, source }) {
+  const escapedSource = JSON.stringify(source);
+  const escapedId = JSON.stringify(scriptIdPart);
+  const escapedName = JSON.stringify(name);
+  const result = await evaluateAsync(`
+    (function() {
+      var fd = new FormData();
+      fd.append('source', ${escapedSource});
+      return fetch(
+        'https://pine-facade.tradingview.com/pine-facade/save/next/' +
+          encodeURIComponent(${escapedId}) +
+          '?allow_create_new=false&name=' + encodeURIComponent(${escapedName}),
+        { method: 'POST', body: fd, credentials: 'include' }
+      ).then(function(r) {
+        return r.text().then(function(t) {
+          var parsed = null;
+          try { parsed = JSON.parse(t); } catch (e) {}
+          return { status: r.status, ok: r.ok, body: parsed, raw: parsed ? null : t.slice(0, 500) };
+        });
+      }).catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+
+  if (result?.error) throw new Error('pine-facade fetch failed: ' + result.error);
+  if (!result?.ok) {
+    throw new Error(
+      'pine-facade /save/next returned HTTP ' +
+        result?.status +
+        ': ' +
+        JSON.stringify(result?.body || result?.raw || '').slice(0, 300)
+    );
+  }
+
+  const body = result.body || {};
+  const metaInfo = (body.result && body.result.metaInfo) || {};
+  const inner = body.result || body;
+  const version =
+    (metaInfo.pine && metaInfo.pine.version) ||
+    inner.version ||
+    body.version ||
+    null;
+  return {
+    scriptIdPart,
+    name: metaInfo.description || inner.name || body.name || name,
+    version,
+  };
+}
+
+export async function save({ name = null, scriptIdPart = null, verify_timeout_ms = 5000 } = {}) {
   await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
@@ -537,13 +595,72 @@ export async function save({ name = null, verify_timeout_ms = 5000 } = {}) {
   }
   const currentSource = sourceProbe;
 
+  // ── Explicit scriptIdPart: overwrite that specific slot in place via /save/next/<id>.
+  //    Wins over both bound and unbound default paths — caller is naming the destination
+  //    explicitly, which is safer than relying on whatever the editor happens to be bound to.
+  //    This is the in-place edit path after pine_open (which intentionally leaves the editor unbound).
+  if (scriptIdPart) {
+    const listing = await listScripts();
+    const target = (listing.scripts || []).find((s) => s.id === scriptIdPart);
+    if (!target) {
+      const err = new Error(
+        `scriptIdPart "${scriptIdPart}" not found in saved scripts. ` +
+          'Pass an id from pine_list_scripts, or pass {name} to create a new slot instead.'
+      );
+      err.code = 'PINE_SAVE_TO_NOT_FOUND';
+      throw err;
+    }
+    const updated = await saveNext({
+      scriptIdPart,
+      name: target.name,
+      source: currentSource,
+    });
+
+    // Verify: poll pine-facade /get/{id}/last until source matches OR timeout.
+    // Mirrors the bound-path verify (TV normalizes line endings to \r\n; compare normalized).
+    const escapedExpected = JSON.stringify(currentSource);
+    const escapedId = JSON.stringify(scriptIdPart);
+    const verify = await evaluateAsync(`
+      (function() {
+        var deadline = Date.now() + ${Number(verify_timeout_ms) | 0};
+        function norm(s) { return (s || '').replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n'); }
+        var expected = norm(${escapedExpected});
+        function poll() {
+          if (Date.now() > deadline) return { ok: false, reason: 'timeout' };
+          return fetch(
+            'https://pine-facade.tradingview.com/pine-facade/get/' + encodeURIComponent(${escapedId}) + '/last',
+            { credentials: 'include' }
+          ).then(function(r) { return r.json(); }).then(function(j) {
+            var src = norm((j && (j.source || (j.result && j.result.source))) || '');
+            var version = (j && (j.version || (j.result && j.result.version))) || null;
+            if (src === expected) return { ok: true, version: version };
+            return new Promise(function(resolve) { setTimeout(function() { resolve(poll()); }, 200); });
+          }).catch(function(e) { return { ok: false, reason: e.message }; });
+        }
+        return poll();
+      })()
+    `);
+
+    return {
+      success: !!verify?.ok,
+      action: verify?.ok ? 'saved_to_existing' : 'save_to_invoked_but_not_verified',
+      scriptIdPart,
+      name: updated.name,
+      version: updated.version || verify?.version || null,
+      verified: !!verify?.ok,
+      verify_source: 'pine-facade/get/' + scriptIdPart + '/last',
+      verify_reason: verify?.ok ? null : verify?.reason || 'unknown',
+    };
+  }
+
   // ── Unbound editor: cannot use save.script (would create new slot anyway, but the
   //    title-prompt flow is brittle). Require an explicit name and POST directly.
   if (!binding.bound) {
     if (!name) {
       const err = new Error(
         'Editor is an unbound draft (title="Untitled script"). To persist, pass `name` to ' +
-        'create a new cloud slot, or call pine_open first to bind to an existing script.'
+        'create a new cloud slot, OR pass `scriptIdPart` to overwrite an existing slot in place ' +
+        '(typical after pine_open — use the scriptIdPart it returned).'
       );
       err.code = 'PINE_UNBOUND_NEEDS_NAME';
       throw err;
@@ -965,9 +1082,9 @@ export async function openScript({ name }) {
     bound: false,
     safety_note:
       'Editor holds the opened source but is UNBOUND (title shows "Untitled script"). ' +
-      'To persist edits, call pine_save({ name: "' + result.name + '" }) — this creates a NEW cloud slot ' +
-      'with the same name (so you will see two entries in your TV library). The per-id overwrite endpoint ' +
-      'is a known follow-up; until then this duplicates loudly instead of overwriting silently.',
+      'To overwrite this slot in place after editing, call pine_save({ scriptIdPart: "' + result.id + '" }) — ' +
+      'updates the existing slot via /pine-facade/save/next/<id>. To save as a new slot with a different name, ' +
+      'use pine_save({ name: "<new name>" }) instead.',
   };
 }
 
