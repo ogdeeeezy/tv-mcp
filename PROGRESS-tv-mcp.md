@@ -18,8 +18,15 @@
 - **Required pine_claim despite delete not touching editor state.** Cloud-side destructive mutation — same threat model as `pine_save` (account-global resource); the singleton claim is the right gate.
 
 ### Next
-- **Restart Claude Code** so the six `tv-mcp-*` lanes pick up `6e4513b`.
-- Follow-up #1 (per-id overwrite endpoint) still open — recipe in HANDOFF. Needs ~5min of manual TV UI clicks from user.
+- **Restart Claude Code** so the six `tv-mcp-*` lanes pick up `6e4513b` + `d1a52a2`.
+- **End-to-end smoke test** of the new in-place save: `pine_claim → pine_open(name=<disposable>) → pine_set_source → pine_save({scriptIdPart}) → pine_get_source` to verify version bumps + source matches.
+
+### Bonus — in-place save endpoint captured + wired (`d1a52a2`)
+- Same fetch-interceptor method as the delete capture, but with the user opening `ICC rv1 Strategy` via TV's UI (title button → "Open script…") to get a bound editor, then Cmd+S after a one-char dirty.
+- Endpoint: `POST /pine-facade/save/next/<urlencoded-id>?allow_create_new=false&name=<urlencoded-name>` with FormData `source`. `allow_create_new=false` is the safety knob.
+- `pine_save` now accepts `scriptIdPart`; when provided, routes to /save/next/<id> (wins over editor binding). Three paths: (1) scriptIdPart → in-place, (2) bound + no id → Monaco save.script, (3) unbound + name → /save/new.
+- Unlocks: `pine_open → edit → pine_save({scriptIdPart})` as the in-place edit workflow.
+- Side-effect: `ICC rv1 Strategy` now has a stray space in its title comment (`I CC rv2 Strategy` instead of `ICC rv2 Strategy`) from the dirty-buffer trigger. Cosmetic — user can edit back via TV UI when convenient.
 
 ---
 

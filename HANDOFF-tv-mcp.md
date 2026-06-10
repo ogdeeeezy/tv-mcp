@@ -4,7 +4,7 @@
 
 ## Current state
 
-**Session 13 (2026-06-10): openScript fix smoke-tested + `pine_delete` wired and shipped (`6e4513b`).**
+**Session 13 (2026-06-10): all open follow-ups closed. `pine_delete` + `pine_save({scriptIdPart})` shipped (`6e4513b`, `d1a52a2`).**
 
 Smoke-test verdict on the openScript fix (`e0e1cc9`): PASS, and louder than expected. `pine_open(name=<existing>)` lands unbound (`bound: false`, title "Untitled script"), and `pine_save(name=<same>)` now returns **HTTP 409 "Script already exists"** — TV's `/pine-facade/save/new?allow_overwrite=false` refuses duplicate names server-side. The handoff had predicted silent duplication; actual behavior is a hard 409 with no library pollution. Library stays clean; the in-place overwrite path remains the only way to persist edits to the same slot (still missing → follow-up #1).
 
@@ -35,9 +35,9 @@ ICC rv3 — Spec Viz (v11.0) untouched throughout. Tests: 94/94 unit pass. The 3
 
 **Before `npm test`: ensure no other Claude/CDP process is hitting Chrome.** A background test run during Session 11 reported 60 failures starting with an 18-minute `chart_set_symbol` timeout — caused by CDP contention with live `ui_evaluate` probes, NOT real regressions. On a quiet Chrome, expect ~160/160. Anything in the 80-100 pass range means Chrome is busy; close other lanes and retry.
 
-One open follow-up:
+All known follow-ups closed:
 
-1. **Per-id overwrite endpoint.** With the Session 12 fix + Session 13 smoke test confirmed, `pine_open` + edits + `pine_save({name=<same>})` hard-409s instead of overwriting the original. The proper fix is the per-id save endpoint that TV's own `save.script` Monaco command uses — but a sniff attempt with `save.script` on an unbound editor produced **zero fetches** (the unbound fuse holds, no URL captured). To capture: open a script via TV's UI (manually click the title button → "Open script…" → pick one), confirm title-button now shows the script's real name + isSaveEnabled flips through bound path, type a single char to dirty the buffer, install the fetch interceptor (`window.__pf_orig_fetch` pattern from Session 12/13 logs — see the helper in Session 13 trace), then trigger `save.script`. The captured POST URL is the missing endpoint. Once known, wire `pine_save_to({ scriptIdPart, source })` for true in-place overwrite.
+~~1. Per-id overwrite endpoint.~~ **CLOSED (Session 13, `d1a52a2`).** Endpoint: `POST pine-facade.tradingview.com/pine-facade/save/next/<urlencoded-id>?allow_create_new=false&name=<urlencoded-name>` with FormData `source`. Captured via fetch interceptor while user did Cmd+S on a `bound` editor (opened "ICC rv1 Strategy" via TV's UI). `pine_save` extended with `scriptIdPart` arg that wins over both bound and unbound default paths — caller-named destination is safer than relying on editor binding. **Not yet smoke-tested end-to-end through the MCP tool** — the live capture confirmed the endpoint shape but next session should run `pine_open → pine_save({scriptIdPart})` on a disposable slot and verify version-bump + source-match.
 
 ~~2. Capture the real delete endpoint.~~ **CLOSED (Session 13, `6e4513b`).** Endpoint was `POST pine-facade.tradingview.com/pine-facade/delete/<urlencoded-id>` — subdomain difference was the entire bug. Prior www-host probe got 401 because cookies/origin context differed. Wired into `pine_delete` tool with name/scriptIdPart targeting + post-action verify.
 
