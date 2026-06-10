@@ -4,6 +4,25 @@
 
 ---
 
+## Session 13: 2026-06-10 — openScript smoke-tested, pine_delete shipped
+
+### Done
+- **openScript fix smoke-tested PASS** (`e0e1cc9`). `pine_open(name="tvmcp_probe_1780835557228")` → `bound: false`, title "Untitled script". Follow-up save: `pine_save({name=<same>})` returned **HTTP 409 "Script already exists"** — TV refuses duplicate names server-side at `/pine-facade/save/new?allow_overwrite=false`. Louder failure than the handoff predicted (no silent dupe), library stays clean.
+- **Delete endpoint captured.** Installed fetch interceptor on the gold-baby tab, user deleted 3 stale probe scripts via TV's UI, log captured: `POST https://pine-facade.tradingview.com/pine-facade/delete/<urlencoded-id>` with no body. Prior 401 probe failed because it hit `www.tradingview.com` (wrong subdomain). DELETE method stays CORS-blocked; POST is the verb.
+- **`pine_delete` tool wired and shipped** (`6e4513b`). Accepts `{name?, scriptIdPart?}`. `scriptIdPart` wins on conflict. Name lookup case-insensitive, refuses on ambiguous match with `PINE_DELETE_AMBIGUOUS` + `matches[]`. Requires `pine_claim`. Verifies by re-listing post-delete (same pattern TV's UI uses — observed re-list after each delete in capture trace).
+- **10 unit tests** for `selectDeleteTarget` (`tests/pine_delete.test.js`); full unit suite 104/104.
+- **Library cleanup side-effect:** 4 stale probe scripts deleted by user during capture (3 directly + restart-test via hard refresh after the first attempt was silently refused).
+
+### Decisions
+- **scriptIdPart wins when both args provided.** Explicit ID is unambiguous; name can collide with the duplicate-slot artifacts that `pine_open` + `pine_save` could create.
+- **Required pine_claim despite delete not touching editor state.** Cloud-side destructive mutation — same threat model as `pine_save` (account-global resource); the singleton claim is the right gate.
+
+### Next
+- **Restart Claude Code** so the six `tv-mcp-*` lanes pick up `6e4513b`.
+- Follow-up #1 (per-id overwrite endpoint) still open — recipe in HANDOFF. Needs ~5min of manual TV UI clicks from user.
+
+---
+
 ## Session 12: 2026-06-10 — openScript rebinding gap closed
 
 ### Done
