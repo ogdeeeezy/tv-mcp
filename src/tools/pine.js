@@ -62,9 +62,13 @@ export function registerPineTools(server) {
     }
   );
 
-  server.tool('pine_open', 'Open a saved Pine Script by name', {
-    name: z.string().describe('Name of the saved script to open (case-insensitive match)'),
-  }, async ({ name }) => {
+  server.tool(
+    'pine_open',
+    'Load a saved Pine Script\'s source into the editor as an UNBOUND draft. Runs the new_indicator Monaco action first to clear any prior binding (prevents the 2026-06-05 silent-overwrite incident shape), then fetches and setValues the script source. The editor will show "Untitled script" — to persist back, call pine_save({name: "<same name>"}) which creates a NEW slot (duplicating in your TV library). The per-id overwrite endpoint is a known follow-up.',
+    {
+      name: z.string().describe('Name of the saved script to open (case-insensitive match)'),
+    },
+    async ({ name }) => {
     try { return jsonResult(await core.openScript({ name })); }
     catch (err) { return jsonResult({ success: false, source: 'internal_api', error: err.message }, true); }
   });

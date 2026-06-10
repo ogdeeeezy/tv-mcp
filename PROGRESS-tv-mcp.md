@@ -4,6 +4,24 @@
 
 ---
 
+## Session 12: 2026-06-10 — openScript rebinding gap closed
+
+### Done
+- **`openScript` rebinding gap closed** (uncommitted on disk). Added `new_indicator` Monaco action invocation before `setValue` in `src/core/pine.js:openScript()`, mirroring the Fix 1+2 pattern in `newScript()`. Editor lands as unbound draft holding the loaded source. Tool description in `src/tools/pine.js` updated to reflect the new "duplicates loudly instead of overwriting silently" contract. 94/94 unit tests still pass.
+- **Discovery: title-button menu has the open-script chain.** Live-probed the Pine editor title button (`[data-qa-id="pine-script-title-button"]`) — its menu lists "Save script", "Make a copy…", "Rename…", "Version history…", "Move script to bottom", "Create new", "Open script… ⌘O". `Create new` wires to `de()` (the `new_indicator` Monaco action — the same path `pine_new` uses). `Open script…` opens a submenu/picker dialog whose inner click handler is the actual editor-bind routine. Couldn't extract the bind handler statically (closure-captured), and didn't pursue further — the `new_indicator` pre-unbind path is a complete safety fix and ships value without it.
+- **save.script on unbound editor confirmed silent no-op** (sniffer captured zero pine-facade fetches, no dialog). The HANDOFF gotcha holds: `isSaveEnabled + placement%3Ddialog` is the real safety fuse. The data-loss path requires a binding established via TV's UI — which `openScript` no longer leaves intact.
+
+### Decisions
+- **Did not pursue the per-id overwrite endpoint** in this session. Capturing it requires a bound editor (manual TV UI click) and the user was frustrated with how long the probing took. Logged as follow-up #1 in HANDOFF with the exact reproduction recipe.
+- **Did not run e2e tests** — they would collide with the pinned `gold` tab via CDP. Unit suite (94 tests) covers pin_registry + pine_analyze + tab_picker + setup; the pine.js change is JS-template strings injected via CDP and isn't directly unit-testable.
+
+### Next
+- Commit `feat(pine): openScript runs new_indicator before setValue (closes rebinding gap)` and push.
+- Capture per-id overwrite endpoint when convenient — HANDOFF #1 has the recipe.
+- Capture delete endpoint via DevTools — HANDOFF #2.
+
+---
+
 ## Session 11: 2026-06-08/09 — Fix 1+2 verified green, e2e fixes staged
 
 ### Done

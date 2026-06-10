@@ -878,8 +878,35 @@ export async function newScript({ type, name = null, source = null } = {}) {
 }
 
 export async function openScript({ name }) {
+  await requirePineClaim();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  // CRITICAL SAFETY STEP (mirrors newScript): invoke new_indicator action FIRST so
+  // the editor's Monaco-side binding is cleared before we setValue with the loaded
+  // source. Without this, openScript leaves the editor bound to whatever cloud slot
+  // was previously bound (via TV UI). A subsequent pine_save with no `name` then
+  // routes through the save.script command and overwrites that stale slot with the
+  // newly-loaded source — the 2026-06-05 incident shape, just deferred one step.
+  //
+  // After this fix, the editor sits as an unbound draft holding the loaded source.
+  // To persist back, callers must pass `name` to pine_save, which creates a fresh
+  // cloud slot. This LOUDLY duplicates the script (same name appears twice in the
+  // user's TV library) instead of silently overwriting an unrelated slot. The
+  // proper per-id save endpoint is a follow-up; until then this is the safe path.
+  const swapped = await evaluate(`
+    (function() {
+      var m = ${FIND_MONACO};
+      if (!m) return { ok: false, error: 'no editor' };
+      var editor = m.editor;
+      var actions = editor.getSupportedActions();
+      var action = actions.find(function(a) { return a.id === 'vs.editor.ICodeEditor:1:new_indicator'; });
+      if (!action) return { ok: false, error: 'new_indicator action not registered' };
+      try { action.run(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+    })()
+  `);
+  if (!swapped?.ok) throw new Error('Monaco new_indicator (pre-open unbind) failed: ' + (swapped?.error || 'unknown'));
+  await new Promise(r => setTimeout(r, 150));
 
   const escapedName = JSON.stringify(name.toLowerCase());
 
@@ -928,7 +955,20 @@ export async function openScript({ name }) {
     throw new Error(result.error);
   }
 
-  return { success: true, name: result.name, script_id: result.id, lines: result.lines, source: 'internal_api', opened: true };
+  return {
+    success: true,
+    name: result.name,
+    script_id: result.id,
+    lines: result.lines,
+    source: 'internal_api',
+    opened: true,
+    bound: false,
+    safety_note:
+      'Editor holds the opened source but is UNBOUND (title shows "Untitled script"). ' +
+      'To persist edits, call pine_save({ name: "' + result.name + '" }) — this creates a NEW cloud slot ' +
+      'with the same name (so you will see two entries in your TV library). The per-id overwrite endpoint ' +
+      'is a known follow-up; until then this duplicates loudly instead of overwriting silently.',
+  };
 }
 
 export async function listScripts() {

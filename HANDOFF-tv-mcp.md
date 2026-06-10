@@ -4,6 +4,8 @@
 
 ## Current state
 
+**openScript rebinding gap closed (Session 12).** `openScript` now runs the `new_indicator` Monaco action before `setValue`, mirroring `newScript`'s safety pattern. Editor lands as an unbound draft holding the loaded source — title shows "Untitled script", `isSaveEnabled` flips through the unbound path on the next save. Cost: persisting back requires `pine_save({ name })` which creates a NEW slot (loud duplicate in the user's library) instead of overwriting in-place. The per-id overwrite endpoint remains a known follow-up. Code on disk, **not yet committed**. Restart Claude Code to pick it up — running MCP processes have the old code.
+
 **Fix 1+2 closed out. Patch verified green end-to-end and pushed (`e7b4a2f`, 2026-06-09 — Session 11).** Fix 3 shipped 2026-06-05.
 
 Session 11 ran the proof-gate sequence cleanly with a force-claim coordinated against the live ICC instance:
@@ -27,7 +29,7 @@ ICC rv3 — Spec Viz (v11.0) untouched throughout. Tests: 94/94 unit pass. The 3
 
 Two open follow-ups, both safe to defer:
 
-1. **`openScript` rebinding gap.** `openScript` currently does `fetch + setValue` only — it overwrites the editor buffer but does NOT update the title-button binding to the new slot. A subsequent `pine_save` then writes via `save.script` to whatever was previously bound. The 2026-06-05 incident shape, masked because callers always pass `name` to `pine_save` (which routes through the unbound path). Real fix needs TV's internal "open script by id" routine — discoverable by live probing the "Open Script" UI click handler or `chartWidgetCollection.activeChartWidget().model().activeStrategySource()` prototype. **Needs live Chrome session** — not unit-testable.
+1. **Per-id overwrite endpoint.** With the Session 12 fix, `pine_open` + edits + `pine_save({name})` creates a duplicate slot rather than overwriting the original. The proper fix is the per-id save endpoint that TV's own `save.script` Monaco command uses — but a sniff attempt with `save.script` on an unbound editor produced **zero fetches** (the unbound fuse holds, no URL captured). To capture: open a script via TV's UI (manually click the title button → "Open script…" → pick one), confirm title-button now shows the script's real name + isSaveEnabled flips through bound path, type a single char to dirty the buffer, run the sniffer probe (`window.__pf_orig_fetch` pattern from Session 12 logs), then trigger `save.script`. The captured POST URL is the missing endpoint. Once known, wire `pine_save_to({ scriptIdPart, source })` for true in-place overwrite.
 
 2. **Capture the real delete endpoint.** `POST /pine-facade/delete/<urlencoded-id>` returns `401 "not an owner"` (probably wrong shape). `DELETE` method is CORS-blocked from page context. `ui_evaluate` doesn't await Promises so async discovery needs a stash-on-`window`-and-poll pattern. **30-second job with Chrome DevTools:** delete one script via TV's UI, copy the actual request from Network tab, wire into a new `pine_delete` tool. Until then, 5 stale probes remain visible in `pine_list_scripts` — user clears via TV UI when convenient.
 
