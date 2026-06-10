@@ -2,6 +2,35 @@
 
 Non-obvious learnings from working on tv-mcp. Project-specific. Cross-project lessons live in `~/.claude/knowledge/`.
 
+## TV pine-facade lives on its own subdomain — `www.tradingview.com/pine-facade/...` returns 401
+
+**Captured:** 2026-06-10 (Session 13)
+
+Every TV "/pine-facade/" endpoint is hosted at `https://pine-facade.tradingview.com/pine-facade/...`, NOT `https://www.tradingview.com/pine-facade/...`. The www host either 401s or routes to a totally different auth surface. Multiple prior probe sessions chased "permissions" / "not an owner" errors that were entirely a wrong-host artifact — cookies and origin headers differ between subdomains.
+
+When sniffing TV's internal API via the fetch interceptor, **always log the full URL including hostname** — never assume the path implies the host. A request like `POST /pine-facade/delete/<id>` could be relative-to-page (www) or absolute-to-subdomain; only the trace tells you.
+
+## TV's save endpoints follow a `/save/new` vs `/save/next/<id>` sibling pattern
+
+**Captured:** 2026-06-10 (Session 13)
+
+The pine-facade save API has two endpoints that look like siblings but mean very different things:
+
+- `POST /pine-facade/save/new?name=<n>&allow_overwrite=false` — create a fresh slot. FormData `source`. 409s on name collision when `allow_overwrite=false`.
+- `POST /pine-facade/save/next/<urlencoded-scriptIdPart>?allow_create_new=false&name=<n>` — update existing slot in place. FormData `source`. Refuses if id missing when `allow_create_new=false`.
+
+The `next` in the URL refers to the *next version* of the existing script, not a "next-id" pagination thing. Mental model: "save the next version of this id". Both endpoints share the FormData `source` body shape; the distinguishing args are URL-level (id in path, safety flag in query).
+
+## Capturing a TV save endpoint requires a bound editor — `save.script` on unbound = zero fetches
+
+**Captured:** 2026-06-10 (Session 13)
+
+The first capture attempt (Session 12) tried to trigger `save.script` on an editor unbound by `pine_open`. Zero pine-facade fetches were sniffed. The `isSaveEnabled` context-key gate noops the command on unbound state — the save URL is never reached.
+
+The working capture method requires TV's own UI to establish a *real binding*: click the title button → "Open script…" → pick one. The title button then shows the script's actual name (not "Untitled script"), and `isSaveEnabled` flips through the bound path. Only THEN does Cmd+S fire the save URL we can intercept.
+
+This means the bind-handler that TV's UI uses (inside the title-button click chain) is a closure we never extracted statically — it's the only path that produces the bound editor state we need for sniffing. Capture method documented in `PROGRESS-tv-mcp.md` Session 13 + handoff trace.
+
 ## Loud duplication > silent overwrite when the proper fix needs more discovery
 
 **Captured:** 2026-06-10 (Session 12)
