@@ -2,6 +2,47 @@
 
 Non-obvious learnings from working on tv-mcp. Project-specific. Cross-project lessons live in `~/.claude/knowledge/`.
 
+## Loud duplication > silent overwrite when the proper fix needs more discovery
+
+**Captured:** 2026-06-10 (Session 12)
+
+The `openScript` rebinding gap (Session 12) had two possible fixes:
+
+1. **Proper fix** — discover TV's internal "open script by id" routine and rebind the editor to the new slot, so subsequent `pine_save` writes through `save.script` to the correct cloud slot. Requires capturing the per-id save endpoint (manual TV UI step + fetch sniffing).
+2. **Defensive fix** — run `new_indicator` action before `setValue` to leave the editor in an unbound "Untitled script" state holding the loaded source. Subsequent `pine_save({name})` creates a duplicate slot rather than silently overwriting the prior binding.
+
+We shipped #2 because the discovery cost for #1 wasn't justified in-session. The trade-off is intentional: the failure mode becomes **visible** (user sees two slots with the same name in their TV library and knows something happened) rather than **silent** (a different unrelated script gets overwritten). Visible failures are recoverable; silent ones aren't.
+
+The proper fix is logged as HANDOFF follow-up #1 with a precise reproduction recipe so a future session can finish it. The lesson generalizes: when you can't ship the perfect fix in this session, ship the one that makes failures observable.
+
+## Pine editor title-button menu structure (TV 2026-06)
+
+**Captured:** 2026-06-10 (Session 12)
+
+Clicking `[data-qa-id="pine-script-title-button"]` opens a 7-item menu. Items (extracted from React fiber traversal of menu items):
+
+| Label | Wires to | Notes |
+|---|---|---|
+| Save script ⌘S | save.script command | Gated on `isSaveEnabled` context key |
+| Make a copy… | (closure) | Likely POSTs to pine-facade/save/new |
+| Rename… | (closure) | Probably hits a rename endpoint |
+| Version history… | (closure) | Reads `/pine-facade/get/{id}/{version}` |
+| Move script to bottom | (closure) | UI reorder, no server call |
+| Create new | `de()` → `new_indicator` action | Same path `pine_new` uses |
+| Open script… ⌘O | (closure → submenu/picker) | The bind handler we wanted to capture |
+
+Note: menu items have `aria-haspopup`, `aria-expanded`, `aria-controls` — they're trigger buttons themselves. The actual handlers are closure-captured (e.g., `(...e)=>{i?.(...e),"doNotClose"!==a&&n(!0,...)}`) so static fiber inspection only gets the wrapper. Reaching the inner `i`/`de` requires either clicking-and-inspecting the resulting UI or extracting from the component that defines them in scope.
+
+## save.script on unbound editor is a true silent no-op
+
+**Captured:** 2026-06-10 (Session 12)
+
+State at probe: `title="Untitled script"`, `isSaveEnabled=true`, model URI contains `placement%3Ddialog`. Triggered `editor.getSupportedActions().find(a => a.id === 'vs.editor.ICodeEditor:1:save.script').run()` with a fetch sniffer patching `window.fetch` to log all pine-facade calls.
+
+Result: **zero fetches, no dialog opened, no state change**. The `isSaveEnabled + placement%3Ddialog` HANDOFF gotcha holds — the action runs (no throw) but TV's internal gating prevents any side effect. This confirms the unbound state IS the safety fuse: even if `save.script` is called erroneously on an unbound editor (e.g., due to user shortcut press), nothing harmful happens.
+
+Practical implication for `pine_save`: the bound-vs-unbound dispatch in `pine.js:save()` is correct — for unbound editors it requires explicit `name` and POSTs directly to `/save/new`, never relying on `save.script`. For bound editors it can safely invoke `save.script` knowing it'll be no-op'd if conditions aren't right.
+
 ## Chrome 136+ blocks `--remote-debugging-port` on the default user-data-dir
 
 **Captured:** 2026-05-15
