@@ -4,15 +4,15 @@
 
 ## Current state
 
-**Session 13 (2026-06-10): all open follow-ups closed. `pine_delete` + `pine_save({scriptIdPart})` shipped (`6e4513b`, `d1a52a2`).**
+**Session 14 (2026-06-10): clean rest state. All open follow-ups closed. Harness structurally sound for trading-strategy development.**
 
-Smoke-test verdict on the openScript fix (`e0e1cc9`): PASS, and louder than expected. `pine_open(name=<existing>)` lands unbound (`bound: false`, title "Untitled script"), and `pine_save(name=<same>)` now returns **HTTP 409 "Script already exists"** — TV's `/pine-facade/save/new?allow_overwrite=false` refuses duplicate names server-side. The handoff had predicted silent duplication; actual behavior is a hard 409 with no library pollution. Library stays clean; the in-place overwrite path remains the only way to persist edits to the same slot (still missing → follow-up #1).
+`pine_save({scriptIdPart})` end-to-end verified through the MCP tool on `tv-mcp-d` (commit `e98a42b`). Created disposable slot → `pine_open` → `pine_set_source` → `pine_save({scriptIdPart})` returned `action: "saved_to_existing"`, `version: 1.0 → 2.0`, `verified: true` via pine-facade `/get/last` cross-check. `pine_list_scripts` confirmed slot id unchanged, name preserved, no duplicate. Slot `pine_delete`d cleanly. The in-place edit workflow (`pine_open` → edit → `pine_save({scriptIdPart})`) is now the verified path.
 
-`pine_delete` tool wired against the captured pine-facade endpoint. POST `https://pine-facade.tradingview.com/pine-facade/delete/<urlencoded-id>` (subdomain matters — prior 401 probe was on www host). Accepts `{name?, scriptIdPart?}`, scriptIdPart wins on conflict, name lookup is case-insensitive, refuses on ambiguous match (PINE_DELETE_AMBIGUOUS with matches[] returned). Requires `pine_claim`. Verifies by re-listing post-delete. 10 unit tests for `selectDeleteTarget`; full unit suite 104/104.
+**Structural audit summary** (Session 14): chrome plumbing, multi-instance coordination, Pine CRUD, chart reading, test coverage (104/104 unit), and docs are all current. The 3 pre-existing e2e drift failures (`tv_launch` binary path, `bottomWidgetBar.hideWidget` removed, `replay_stop` state assertion) and the cosmetic `ICC rv1 Strategy` title typo are parked in `~/obsidian/agenting/projects/tradingview-mcp/tv-mcp-housekeeping.md` with trigger conditions for when to pull each out. None block strategy dev.
 
-**Restart Claude Code to pick up `6e4513b`** — the six `tv-mcp-*` lanes are stale until restart.
+`pine_delete` tool wired against the captured pine-facade endpoint. POST `https://pine-facade.tradingview.com/pine-facade/delete/<urlencoded-id>` (subdomain matters — prior 401 probe was on www host). Accepts `{name?, scriptIdPart?}`, scriptIdPart wins on conflict, name lookup is case-insensitive, refuses on ambiguous match (PINE_DELETE_AMBIGUOUS with matches[] returned). Requires `pine_claim`. Verifies by re-listing post-delete.
 
-**openScript rebinding gap closed (Session 12, `e0e1cc9`).** `openScript` runs `new_indicator` before `setValue`, mirroring `newScript`'s safety pattern. Editor lands as unbound draft, persisting back requires `pine_save({ name })` which (per Session 13 smoke test) now hard-409s on duplicate names rather than silently duplicating.
+**openScript rebinding gap closed (Session 12, `e0e1cc9`).** `openScript` runs `new_indicator` before `setValue`, mirroring `newScript`'s safety pattern. Editor lands as unbound draft, persisting back via `pine_save({name})` hard-409s on duplicate names; `pine_save({scriptIdPart})` is the supported in-place path.
 
 **Fix 1+2 closed out. Patch verified green end-to-end and pushed (`e7b4a2f`, 2026-06-09 — Session 11).** Fix 3 shipped 2026-06-05.
 
@@ -33,7 +33,11 @@ ICC rv3 — Spec Viz (v11.0) untouched throughout. Tests: 94/94 unit pass. The 3
 
 ## Immediate next action
 
-**Before `npm test`: ensure no other Claude/CDP process is hitting Chrome.** A background test run during Session 11 reported 60 failures starting with an 18-minute `chart_set_symbol` timeout — caused by CDP contention with live `ui_evaluate` probes, NOT real regressions. On a quiet Chrome, expect ~160/160. Anything in the 80-100 pass range means Chrome is busy; close other lanes and retry.
+**No outstanding work on the harness.** Resume trading-strategy development at the project level (`~/tradibos/`, `~/lib/schwab-market-data/`, etc.). The substrate is ready.
+
+If a future session needs to fix the parked items, the housekeeping subnode is at `~/obsidian/agenting/projects/tradingview-mcp/tv-mcp-housekeeping.md` and has trigger conditions for each.
+
+**If running `npm test`:** ensure no other Claude/CDP process is hitting Chrome. A background test run during Session 11 reported 60 failures starting with an 18-minute `chart_set_symbol` timeout — caused by CDP contention with live `ui_evaluate` probes, NOT real regressions. On a quiet Chrome, expect ~157/160 (3 pre-existing drift failures are parked). Anything in the 80-100 pass range means Chrome is busy; close other lanes and retry.
 
 All known follow-ups closed:
 
